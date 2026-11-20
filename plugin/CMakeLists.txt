@@ -166,12 +166,24 @@ set_source_files_properties("${AMBIKA_ROOT}/voicecard/resources.cc" PROPERTIES
 # Upstream firmware sources are compiled as-is; their warnings are not ours.
 # The generated tables store negative literals in uint8_t arrays, which
 # avr-gcc wraps silently; allow the same wrapping here.
-set_source_files_properties(${AMBIKA_UPSTREAM_SOURCES} PROPERTIES
-	COMPILE_OPTIONS "-w;-Wno-c++11-narrowing")
+if(MSVC)
+	set_source_files_properties(${AMBIKA_UPSTREAM_SOURCES} PROPERTIES
+		COMPILE_OPTIONS "/w")
+else()
+	set_source_files_properties(${AMBIKA_UPSTREAM_SOURCES} PROPERTIES
+		COMPILE_OPTIONS "-w;-Wno-c++11-narrowing")
+endif()
 # common/patch.h uses PROGMEM without including <avr/pgmspace.h> (on the AVR it
 # always arrives through an earlier include). Make it available everywhere.
-target_compile_options(ambika_engine PUBLIC
-	"SHELL:-include \"${CMAKE_CURRENT_SOURCE_DIR}/engine/shim/avr/pgmspace.h\"")
+if(MSVC)
+	target_compile_options(ambika_engine PUBLIC
+		"/FI${CMAKE_CURRENT_SOURCE_DIR}/engine/shim/avr/pgmspace.h"
+		/utf-8 /bigobj /Zc:__cplusplus /Zc:preprocessor)
+	target_compile_definitions(ambika_engine PUBLIC NOMINMAX _USE_MATH_DEFINES)
+else()
+	target_compile_options(ambika_engine PUBLIC
+		"SHELL:-include \"${CMAKE_CURRENT_SOURCE_DIR}/engine/shim/avr/pgmspace.h\"")
+endif()
 
 # --- Tests -------------------------------------------------------------------
 include(CTest)

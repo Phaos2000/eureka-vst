@@ -184,6 +184,23 @@ The built plug-ins end up in
 and `Standalone/`. Developer notes (how the firmware is ported, the filters,
 tests and preset format) are in [plugin/README.md](plugin/README.md).
 
+
+## Building (Windows)
+
+Requires Visual Studio 2022 or newer (Desktop C++ workload) and CMake 3.22+.
+
+```sh
+git clone --recursive https://github.com/Milkman8008/eureka-vst.git
+cd eureka-vst
+cmake -S plugin -B plugin/build/win -G "Visual Studio 18 2026" -A x64
+cmake --build plugin/build/win --config Release --target AmbikaPlugin_VST3 AmbikaPlugin_Standalone -- -m:1
+```
+
+(Use `-G "Visual Studio 17 2022"` with VS 2022.) Clone to a short path such
+as `C:\src` to stay under the Windows path-length limit. The VST3 ends up in
+`plugin/build/win/AmbikaPlugin_artefacts/Release/VST3/`; copy `eureka!.vst3`
+to `C:\Program Files\Common Files\VST3\`.
+
 ## Credits and licence
 
 eureka! is built on the **Ambika** by **Mutable Instruments**: the firmware
