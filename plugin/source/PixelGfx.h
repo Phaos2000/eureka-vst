@@ -89,6 +89,8 @@ namespace ambika_plugin::pixel
         void logo (int x, int y, int k);
         void well (int x, int y, int width, int height);
         void band (int x, int y, int width);
+        // Section header: style 0 grey, 1 solid navy, 2 navy under the title dithering into black.
+        void headerBand (int x, int y, int width, int textWidth, int style);
         void led (int x, int y, bool on);
         void button (int x, int y, int width, const juce::String& label, bool on, bool withLed = true);
         // r = 15 (large) or 11 (small); value 0..1.
@@ -96,8 +98,9 @@ namespace ambika_plugin::pixel
         // Panel print centred on cx in a band; reverse video when focused.
         void bandLabel (const juce::String& s, int cx, int bandY, bool reversed, bool enabled = true);
 
-        juce::Image toImage (int zoom) const;
-        void toImage (juce::Image& image, int zoom) const;
+        // zoomHalves is the zoom in half steps: 2 = 1x, 3 = 1.5x, 4 = 2x, 6 = 3x.
+        juce::Image toImage (int zoomHalves) const;
+        void toImage (juce::Image& image, int zoomHalves) const;
 
     private:
         int w, h;

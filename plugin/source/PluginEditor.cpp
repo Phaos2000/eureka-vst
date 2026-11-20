@@ -51,14 +51,14 @@ namespace ambika_plugin
     AmbikaAudioProcessorEditor::AmbikaAudioProcessorEditor (AmbikaAudioProcessor& p)
         : AudioProcessorEditor (p), audioProcessor (p), state (p.parameters()), presets (p.presets())
     {
-        zoomFactor = juce::jlimit (1, 3, p.editorZoom());
+        zoomHalves = juce::jlimit (2, 6, p.editorZoomHalves());
         setOpaque (true);
         setWantsKeyboardFocus (true);
         buildPlate();
         refreshLibrary();
-        setSize (canvasWidth * zoomFactor, canvasHeight * zoomFactor);
+        setSize (scaled (canvasWidth), scaled (canvasHeight));
         render();
-        canvas.toImage (image, zoomFactor);
+        canvas.toImage (image, zoomHalves);
         shownPixels = canvas.pixels();
         startTimerHz (30);
     }
@@ -85,10 +85,10 @@ namespace ambika_plugin
     void AmbikaAudioProcessorEditor::refresh()
     {
         render();
-        if (canvas.pixels() != shownPixels || image.getWidth() != canvasWidth * zoomFactor)
+        if (canvas.pixels() != shownPixels || image.getWidth() != scaled (canvasWidth))
         {
             shownPixels = canvas.pixels();
-            canvas.toImage (image, zoomFactor);
+            canvas.toImage (image, zoomHalves);
             repaint();
         }
     }
@@ -271,10 +271,10 @@ namespace ambika_plugin
 
     void AmbikaAudioProcessorEditor::sectionBand (int x, int y, int w, const juce::String& title, const juce::String& right)
     {
-        canvas.band (x, y, w);
-        canvas.text3 (title, x + 4, y + 2, LT);
+        canvas.headerBand (x, y, w, Canvas::width3 (title) + 4, headerStyle);
+        canvas.text3 (title, x + 4, y + 2, headerStyle > 0 ? WH : LT);
         if (right.isNotEmpty())
-            canvas.text3 (right, x + w - 4 - Canvas::width3 (right), y + 2, MID);
+            canvas.text3 (right, x + w - 4 - Canvas::width3 (right), y + 2, headerStyle > 0 ? LT : MID);
     }
 
     void AmbikaAudioProcessorEditor::knob (int cx, int cy, int r, int labelBandY, juce::RangedAudioParameter* p,
@@ -393,10 +393,19 @@ namespace ambika_plugin
         sectionBand (360, 104, 128, "PROGRAM");
 
         // Zoom.
-        for (int i = 0; i < 3; ++i)
-            button (500 + i * 24, 80, 20, juce::String (i + 1) + "X", zoomFactor == i + 1,
-                    [this, i] { setZoom (i + 1); });
-        sectionBand (500, 104, 68, "ZOOM");
+        {
+            static const char* const labels[] = { "1X", "1.5X", "2X", "3X" };
+            static const int halves[] = { 2, 3, 4, 6 };
+            static const int widths[] = { 16, 22, 16, 16 };
+            int bx = 494;
+            for (int i = 0; i < 4; ++i)
+            {
+                const int h = halves[i];
+                button (bx, 80, widths[i], labels[i], zoomHalves == h, [this, h] { setZoom (h); });
+                bx += widths[i] + 2;
+            }
+        }
+        sectionBand (494, 104, 76, "ZOOM");
 
         // Output level.
         canvas.band (580, 104, 36);
@@ -1190,14 +1199,24 @@ namespace ambika_plugin
         refresh();
     }
 
-    void AmbikaAudioProcessorEditor::setZoom (int newZoom)
+    void AmbikaAudioProcessorEditor::setZoom (int halves)
     {
-        zoomFactor = juce::jlimit (1, 3, newZoom);
-        audioProcessor.setEditorZoom (zoomFactor);
-        setSize (canvasWidth * zoomFactor, canvasHeight * zoomFactor);
+        zoomHalves = juce::jlimit (2, 6, halves);
+        audioProcessor.setEditorZoomHalves (zoomHalves);
+        setSize (scaled (canvasWidth), scaled (canvasHeight));
         render();
         shownPixels = canvas.pixels();
-        canvas.toImage (image, zoomFactor);
+        canvas.toImage (image, zoomHalves);
+        repaint();
+    }
+
+    void AmbikaAudioProcessorEditor::setHeaderStyle (int style)
+    {
+        headerStyle = juce::jlimit (0, 2, style);
+        buildPlate();
+        render();
+        shownPixels = canvas.pixels();
+        canvas.toImage (image, zoomHalves);
         repaint();
     }
 

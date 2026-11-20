@@ -241,6 +241,23 @@ namespace ambika_plugin::pixel
         fill (x, y + 9, width, 1, BLK);
     }
 
+    void Canvas::headerBand (int x, int y, int width, int textWidth, int style)
+    {
+        if (style <= 0)
+        {
+            band (x, y, width);
+            return;
+        }
+        const int solid = style == 1 ? width : std::min (width, textWidth + 10);
+        fill (x, y, solid, 9, NAVY);
+        const int fade = std::min (width - solid, 40);
+        for (int dx = 0; dx < width - solid; ++dx)
+            for (int row = 0; row < 9; ++row)
+                put (x + solid + dx, y + row,
+                     dx < fade ? ramp ({ NAVY, BLK }, (dx + 0.5) / fade, x + solid + dx, y + row) : (int) BLK);
+        fill (x, y + 9, width, 1, BLK);
+    }
+
     void Canvas::well (int x, int y, int width, int height)
     {
         fill (x, y, width, height, D2);
@@ -325,19 +342,21 @@ namespace ambika_plugin::pixel
         }
     }
 
-    juce::Image Canvas::toImage (int zoom) const
+    juce::Image Canvas::toImage (int zoomHalves) const
     {
         juce::Image image;
-        toImage (image, zoom);
+        toImage (image, zoomHalves);
         return image;
     }
 
-    void Canvas::toImage (juce::Image& image, int zoom) const
+    void Canvas::toImage (juce::Image& image, int zoomHalves) const
     {
-        zoom = std::max (1, zoom);
-        if (! image.isValid() || image.getWidth() != w * zoom || image.getHeight() != h * zoom
+        zoomHalves = std::max (2, zoomHalves);
+        const int outW = w * zoomHalves / 2;
+        const int outH = h * zoomHalves / 2;
+        if (! image.isValid() || image.getWidth() != outW || image.getHeight() != outH
             || image.getFormat() != juce::Image::ARGB)
-            image = juce::Image (juce::Image::ARGB, w * zoom, h * zoom, false, juce::SoftwareImageType());
+            image = juce::Image (juce::Image::ARGB, outW, outH, false, juce::SoftwareImageType());
 
         std::array<juce::PixelARGB, kNumInks> colours;
         for (int i = 0; i < kNumInks; ++i)
@@ -345,20 +364,20 @@ namespace ambika_plugin::pixel
             const auto c = kPalette[i];
             colours[(size_t) i].setARGB (0xff, (juce::uint8) (c >> 16), (juce::uint8) (c >> 8), (juce::uint8) c);
         }
+        // Nearest neighbour; at 1.5x every other source pixel is two output pixels wide.
+        std::vector<int> sourceX ((size_t) outW);
+        for (int x = 0; x < outW; ++x)
+            sourceX[(size_t) x] = x * 2 / zoomHalves;
         juce::Image::BitmapData data (image, juce::Image::BitmapData::writeOnly);
-        for (int y = 0; y < h; ++y)
-            for (int zy = 0; zy < zoom; ++zy)
+        for (int y = 0; y < outH; ++y)
+        {
+            auto* dest = data.getLinePointer (y);
+            const auto* row = &px[(size_t) ((y * 2 / zoomHalves) * w)];
+            for (int x = 0; x < outW; ++x)
             {
-                auto* dest = data.getLinePointer (y * zoom + zy);
-                for (int x = 0; x < w; ++x)
-                {
-                    const auto& colour = colours[px[(size_t) (y * w + x)]];
-                    for (int zx = 0; zx < zoom; ++zx)
-                    {
-                        *reinterpret_cast<juce::PixelARGB*> (dest) = colour;
-                        dest += data.pixelStride;
-                    }
-                }
+                *reinterpret_cast<juce::PixelARGB*> (dest) = colours[row[sourceX[(size_t) x]]];
+                dest += data.pixelStride;
             }
+        }
     }
 }

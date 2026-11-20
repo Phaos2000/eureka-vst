@@ -41,8 +41,12 @@ namespace ambika_plugin
         void showMatrixPage (int page);  // 0 slots 1-8, 1 slots 9-16
         void editPart (int part);
         void showSaveDialog();
-        void setZoom (int zoom);
-        int zoom() const { return zoomFactor; }
+        // Zoom in half steps: 2 = 1x, 3 = 1.5x, 4 = 2x, 6 = 3x.
+        void setZoom (int halves);
+        int zoom() const { return zoomHalves; }
+        int scaled (int canvasPixels) const { return canvasPixels * zoomHalves / 2; }
+        // Section header look: 0 grey, 1 navy, 2 navy fading to black.
+        void setHeaderStyle (int style);
         // Touches a control as if it had been clicked (the display follows it);
         // engine id for part parameters, host id otherwise.
         void focusParameter (const juce::String& id, bool asEdit = false);  // asEdit: show the detailed line
@@ -78,7 +82,7 @@ namespace ambika_plugin
         void renderOnce();
         void buildPlate();
         const Hit* hitAt (juce::Point<int> p) const;
-        juce::Point<int> toCanvas (juce::Point<int> p) const { return { p.x / zoomFactor, p.y / zoomFactor }; }
+        juce::Point<int> toCanvas (juce::Point<int> p) const { return { p.x * 2 / zoomHalves, p.y * 2 / zoomHalves }; }
         void addHit (juce::Rectangle<int> area, std::function<void()> onClick);
         void button (int x, int y, int w, const juce::String& label, bool on, std::function<void()> onClick, bool withLed = true);
 
@@ -139,7 +143,8 @@ namespace ambika_plugin
         pixel::Canvas plateCache { canvasWidth, canvasHeight };
         std::vector<uint8_t> shownPixels;
         juce::Image image;
-        int zoomFactor = 2;
+        int zoomHalves = 4;
+        int headerStyle = 2;
         int page = 0;
         int matrixPage = 0;
         int selectedSlot = 0;

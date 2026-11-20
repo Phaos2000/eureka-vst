@@ -56,8 +56,9 @@ namespace
     void snapshot (Editor& editor, const juce::File& dir, const juce::String& name)
     {
         const auto& canvas = editor.renderCanvas();
-        writePng (canvas.toImage (1), dir.getChildFile (name + "-1x.png"));
-        writePng (canvas.toImage (2), dir.getChildFile (name + "-2x.png"));
+        writePng (canvas.toImage (2), dir.getChildFile (name + "-1x.png"));
+        writePng (canvas.toImage (3), dir.getChildFile (name + "-1h5x.png"));
+        writePng (canvas.toImage (4), dir.getChildFile (name + "-2x.png"));
     }
 }
 
@@ -91,7 +92,7 @@ int main (int argc, char** argv)
         std::printf ("the editor is not the pixel faceplate\n");
         return 1;
     }
-    if (editor->getWidth() != Editor::canvasWidth * editor->zoom())
+    if (editor->getWidth() != editor->scaled (Editor::canvasWidth))
     {
         std::printf ("editor size %d x %d does not match the zoom\n", editor->getWidth(), editor->getHeight());
         ++failures;
@@ -169,14 +170,30 @@ int main (int argc, char** argv)
     editor->showSaveDialog();
     snapshot (*editor, dir, "save-dialog");
 
-    // Zoom: the window follows, and the setting is kept in the plug-in state.
-    editor->setZoom (3);
-    if (editor->getWidth() != Editor::canvasWidth * 3 || processor.editorZoom() != 3)
+    // The three section header looks, on the synth page.
+    editor->showPage (0);
+    editor->focusParameter ("osc1_shape");
+    for (int style = 0; style < 3; ++style)
     {
-        std::printf ("zoom 3 did not resize the editor\n");
+        editor->setHeaderStyle (style);
+        snapshot (*editor, dir, "header-style-" + juce::String (style));
+    }
+    editor->setHeaderStyle (2);
+
+    // Zoom: the window follows, and the setting is kept in the plug-in state.
+    editor->setZoom (6);
+    if (editor->getWidth() != Editor::canvasWidth * 3 || processor.editorZoomHalves() != 6)
+    {
+        std::printf ("zoom 3x did not resize the editor\n");
         ++failures;
     }
-    editor->setZoom (2);
+    editor->setZoom (3);
+    if (editor->getWidth() != 960 || editor->getHeight() != 600 || processor.editorZoomHalves() != 3)
+    {
+        std::printf ("zoom 1.5x did not resize the editor\n");
+        ++failures;
+    }
+    editor->setZoom (4);
 
     presetDir.deleteRecursively();
     processor.editorBeingDeleted (editor.get());
