@@ -1,1212 +1,1664 @@
 #include "PluginEditor.h"
 
-#include "PresetBrowser.h"
-#include "Skin.h"
+#include <cmath>
+
+#include "AmbikaImport.h"
+#include "PluginParameters.h"
+#include "analog.h"
+#include "engine.h"
+#include "parameters.h"
+#include "preview.h"
+#include "surge_filter.h"
 
 namespace ambika_plugin
 {
+    using namespace pixel;
+
     namespace
     {
-        constexpr int kHeaderHeight = 64;
-        constexpr int kPresetBarHeight = 42;
-        constexpr int kPagesTop = kHeaderHeight + kPresetBarHeight;
-        constexpr int kMargin = 12;
+        constexpr juce::uint32 kDetailMs = 1500;  // detailed display line after an edit
+        constexpr juce::uint32 kToastMs = 3000;
+        constexpr int kLibraryRows = 18;
 
-        juce::String n (int i) { return juce::String (i); }
+        // Synth page rows: section band, knob centre, label band.
+        constexpr int kRowY[] { 120, 188, 256, 324 };
+        constexpr int kPitch = 36;
 
-        void layoutGrid (const std::vector<ParameterControl*>& items, juce::Rectangle<int> area, int columns,
-                         int cellHeight)
+        struct KnobSpec
         {
-            const int cellWidth = area.getWidth() / columns;
-            for (size_t i = 0; i < items.size(); ++i)
-            {
-                const int column = (int) i % columns, row = (int) i / columns;
-                items[i]->setBounds (area.getX() + column * cellWidth, area.getY() + row * cellHeight,
-                                     cellWidth, cellHeight);
-            }
-        }
-
-        // Signal-flow arrow between two panels.
-        void drawArrow (juce::Graphics& g, juce::Point<float> from, juce::Point<float> to, juce::Colour colour)
-        {
-            g.setColour (colour);
-            g.drawLine ({ from, to.translated (-5.0f, 0.0f) }, 1.5f);
-            juce::Path head;
-            head.addTriangle (to.x, to.y, to.x - 7.0f, to.y - 4.5f, to.x - 7.0f, to.y + 4.5f);
-            g.fillPath (head);
-        }
-
-        juce::Colour accentOf (const juce::Component& c)
-        {
-            return c.findColour (juce::Slider::rotarySliderFillColourId);
-        }
-    }
-
-    //==============================================================================
-    void Page::bindPart (int part)
-    {
-        for (auto& c : controls)
-            c->bindPart (part);
-        for (auto& d : displays)
-            d->bindPart (part);
-    }
-
-    void Page::poll()
-    {
-        for (auto& d : displays)
-            d->poll();
-    }
-
-    ParameterControl& Page::control (juce::Component& parent, const juce::String& id, const juce::String& label,
-                                     ControlStyle style, bool partScoped)
-    {
-        controls.push_back (std::make_unique<ParameterControl> (state, id, label, style, partScoped));
-        parent.addAndMakeVisible (*controls.back());
-        return *controls.back();
-    }
-
-    Panel& Page::panel (const juce::String& title)
-    {
-        panels.push_back (std::make_unique<Panel> (title));
-        addAndMakeVisible (*panels.back());
-        return *panels.back();
-    }
-
-    //==============================================================================
-    SynthPage::SynthPage (APVTS& s) : Page (s)
-    {
-        using CS = ControlStyle;
-        for (int i = 0; i < 2; ++i)
-        {
-            const auto o = "osc" + n (i + 1);
-            auto& p = panel ("Oscillator " + n (i + 1));
-            oscillators[i] = { &p, &display<OscillatorDisplay> (p, state, i + 1),
-                               &control (p, o + "_shape", "Waveform", CS::Combo),
-                               &control (p, o + "_parameter", "Parameter", CS::Knob),
-                               &control (p, o + "_range", "Range", CS::Knob),
-                               &control (p, o + "_tune", "Tune", CS::Knob) };
-        }
-
-        mixer = &panel ("Mixer");
-        mixerControls = { &control (*mixer, "mix_balance", "Osc 1 / 2", CS::Knob),
-                          &control (*mixer, "mix_operator", "Crossmod", CS::Combo),
-                          &control (*mixer, "mix_amount", "Amount", CS::Knob),
-                          &control (*mixer, "mix_sub_shape", "Sub / click", CS::Combo),
-                          &control (*mixer, "mix_sub_level", "Sub level", CS::Knob),
-                          &control (*mixer, "mix_noise", "Noise", CS::Knob),
-                          &control (*mixer, "mix_fuzz", "Fuzz", CS::Knob),
-                          &control (*mixer, "mix_crush", "Crush", CS::Knob) };
-
-        filter = &panel ("Filter");
-        filterDisplay = &display<FilterDisplay> (*filter, state);
-        filterModel = &control (*filter, "filter_model", "Model", CS::Combo);
-        filterVariant = &display<FilterVariantControl> (*filter, state);
-        filterModelReader = std::make_unique<ParameterReader> (state, std::vector<juce::String> { "filter_model" });
-        filterControls = { &control (*filter, "filter_cutoff", "Frequency", CS::Knob),
-                           &control (*filter, "filter_resonance", "Resonance", CS::Knob),
-                           &control (*filter, "filter_mode", "Mode", CS::Combo),
-                           &control (*filter, "filter_env", "Env 2 amount", CS::Knob),
-                           &control (*filter, "filter_lfo", "LFO 2 amount", CS::Knob) };
-
-        voice = &panel ("Voice");
-        voiceControls = { &control (*voice, "part_polyphony", "Voicing", CS::Combo),
-                          &control (*voice, "part_legato", "Legato", CS::Combo),
-                          &control (*voice, "part_volume", "Volume", CS::Knob),
-                          &control (*voice, "part_pan", "Pan", CS::Knob),
-                          &control (*voice, "part_portamento", "Glide", CS::Knob),
-                          &control (*voice, "part_octave", "Octave", CS::Knob),
-                          &control (*voice, "part_tuning", "Tune", CS::Knob),
-                          &control (*voice, "part_spread", "Spread", CS::Knob) };
-
-        for (int i = 0; i < 3; ++i)
-        {
-            const auto e = "env" + n (i + 1), l = "lfo" + n (i + 1);
-            auto& p = panel ("Envelope " + n (i + 1) + "  /  LFO " + n (i + 1));
-            envelopes[i] = { &p, &display<EnvelopeDisplay> (p, state, i + 1),
-                             &display<LfoDisplay> (p, state, l + "_shape", l + "_rate", true),
-                             &control (p, e + "_attack", "Attack", CS::Knob),
-                             &control (p, e + "_decay", "Decay", CS::Knob),
-                             &control (p, e + "_sustain", "Sustain", CS::Knob),
-                             &control (p, e + "_release", "Release", CS::Knob),
-                             &control (p, l + "_shape", "LFO wave", CS::Combo),
-                             &control (p, l + "_rate", "Rate", CS::Knob),
-                             &control (p, l + "_sync", "Trigger", CS::Combo) };
-        }
-
-        voiceLfo = &panel ("Voice LFO");
-        voiceLfoDisplay = &display<LfoDisplay> (*voiceLfo, state, "voice_lfo_shape", "voice_lfo_rate", false);
-        voiceLfoShape = &control (*voiceLfo, "voice_lfo_shape", "Wave", CS::Combo);
-        voiceLfoRate = &control (*voiceLfo, "voice_lfo_rate", "Rate", CS::Knob);
-        voiceLfo->onPaint = [this] (juce::Graphics& g)
-        {
-            g.setColour (Palette::faintText);
-            g.setFont (juce::Font (eurekaFont (11.5f)));
-            g.drawFittedText ("LFO 4 runs separately on every voice card, so each note gets its own "
-                              "phase. Route it in the Mod page.",
-                              voiceLfo->content().withHeight (120).reduced (2, 6), juce::Justification::topLeft, 6);
-        };
-    }
-
-    void SynthPage::resized()
-    {
-        auto area = getLocalBounds().reduced (kMargin);
-        const int gap = 22;
-
-        // Row 1: oscillators -> mixer -> filter -> voice.
-        auto top = area.removeFromTop (322);
-        auto oscColumn = top.removeFromLeft (360);
-        for (auto& o : oscillators)
-        {
-            o.panel->setBounds (oscColumn.removeFromTop (155));
-            oscColumn.removeFromTop (12);
-            auto c = o.panel->content();
-            o.display->setBounds (c.removeFromLeft (130).reduced (0, 4));
-            c.removeFromLeft (8);
-            o.shape->setBounds (c.removeFromTop (44));
-            const int w = c.getWidth() / 3;
-            o.parameter->setBounds (c.removeFromLeft (w));
-            o.range->setBounds (c.removeFromLeft (w));
-            o.tune->setBounds (c);
-        }
-        top.removeFromLeft (gap);
-        mixer->setBounds (top.removeFromLeft (262));
-        layoutGrid (mixerControls, mixer->content(), 3, 96);
-        top.removeFromLeft (gap);
-        filter->setBounds (top.removeFromLeft (300));
-        {
-            auto c = filter->content();
-            filterDisplay->setBounds (c.removeFromTop (70));
-            c.removeFromTop (4);
-            auto models = c.removeFromTop (44);
-            filterModel->setBounds (models.removeFromLeft (models.getWidth() * 3 / 5).reduced (3, 0));
-            filterVariant->setBounds (models.reduced (3, 0));
-            c.removeFromTop (4);
-            layoutGrid (filterControls, c, 3, 84);
-        }
-        top.removeFromLeft (gap);
-        voice->setBounds (top);
-        {
-            auto c = voice->content();
-            const int w = c.getWidth() / 2;
-            auto row = c.removeFromTop (46);
-            voiceControls[0]->setBounds (row.removeFromLeft (w).reduced (3, 0));
-            voiceControls[1]->setBounds (row.reduced (3, 0));
-            c.removeFromTop (4);
-            std::vector<ParameterControl*> knobs (voiceControls.begin() + 2, voiceControls.end());
-            layoutGrid (knobs, c, 2, 78);
-        }
-
-        // Row 2: envelopes with their LFOs, and the voice LFO.
-        area.removeFromTop (16);
-        const int envWidth = 318;
-        for (auto& e : envelopes)
-        {
-            e.panel->setBounds (area.removeFromLeft (envWidth));
-            area.removeFromLeft (16);
-            auto c = e.panel->content();
-            e.envelope->setBounds (c.removeFromTop (78));
-            c.removeFromTop (2);
-            auto knobs = c.removeFromTop (84);
-            const int w = knobs.getWidth() / 4;
-            for (auto* k : { e.attack, e.decay, e.sustain, e.release })
-                k->setBounds (knobs.removeFromLeft (w));
-            c.removeFromTop (8);
-            e.lfo->setBounds (c.removeFromTop (40));
-            c.removeFromTop (4);
-            const int lw = c.getWidth() / 3;
-            e.shape->setBounds (c.removeFromLeft (lw).reduced (3, 10));
-            e.rate->setBounds (c.removeFromLeft (lw));
-            e.sync->setBounds (c.reduced (3, 10));
-        }
-        voiceLfo->setBounds (area);
-        {
-            auto c = voiceLfo->content();
-            c.removeFromTop (172);  // Line up with the LFO row of the envelope panels.
-            voiceLfoDisplay->setBounds (c.removeFromTop (40));
-            c.removeFromTop (4);
-            voiceLfoShape->setBounds (c.removeFromLeft (c.getWidth() / 2).reduced (3, 10));
-            voiceLfoRate->setBounds (c);
-        }
-    }
-
-    void SynthPage::bindPart (int part)
-    {
-        Page::bindPart (part);
-        filterVariant->bindVariantPart (part);
-        filterModelReader->bindPart (part);
-        poll();
-    }
-
-    void SynthPage::poll()
-    {
-        Page::poll();
-        filterVariant->refresh();
-        filterModelReader->poll();
-        // The LP/BP/HP mode belongs to the Ambika SVF; Surge models carry
-        // their response type in the model itself.
-        filterControls[2]->setEnabled (filterModelReader->value (0) == 0);
-    }
-
-    void SynthPage::paint (juce::Graphics& g)
-    {
-        const auto colour = accentOf (*this).withAlpha (0.75f);
-        const auto m = mixer->getBounds().toFloat(), f = filter->getBounds().toFloat(),
-                   v = voice->getBounds().toFloat();
-        for (auto& o : oscillators)
-        {
-            const auto b = o.panel->getBounds().toFloat();
-            drawArrow (g, { b.getRight() + 3.0f, b.getCentreY() }, { m.getX() - 3.0f, b.getCentreY() }, colour);
-        }
-        drawArrow (g, { m.getRight() + 3.0f, m.getCentreY() }, { f.getX() - 3.0f, m.getCentreY() }, colour);
-        drawArrow (g, { f.getRight() + 3.0f, f.getCentreY() }, { v.getX() - 3.0f, f.getCentreY() }, colour);
-    }
-
-    //==============================================================================
-    namespace
-    {
-        constexpr int kRowHeight = 32;
-        constexpr int kTableTop = 62;  // Panel-relative y of the first row.
-        constexpr int kTableLeft = 52;
-
-        void paintTable (juce::Graphics& g, const Panel& panel, int rows,
-                         std::initializer_list<std::pair<const char*, int>> columns)
-        {
-            g.setColour (Palette::dimText);
-            g.setFont (juce::Font (eurekaFont (11.5f)));
-            int x = kTableLeft;
-            for (const auto& [text, width] : columns)
-            {
-                g.drawText (text, x, kTableTop - 22, width, 18, juce::Justification::centredLeft);
-                x += width;
-            }
-            for (int r = 0; r < rows; ++r)
-            {
-                const int y = kTableTop + r * kRowHeight;
-                if (r % 2 == 0)
-                {
-                    g.setColour (Palette::panelRaised.withAlpha (0.5f));
-                    g.fillRoundedRectangle (8.0f, (float) y, (float) panel.getWidth() - 16.0f, (float) kRowHeight, 4.0f);
-                }
-                g.setColour (Palette::faintText);
-                g.drawText (n (r + 1), 16, y, 30, kRowHeight, juce::Justification::centredLeft);
-            }
-        }
-    }
-
-    ModulationPage::ModulationPage (APVTS& s) : Page (s)
-    {
-        matrix = &panel ("Modulation matrix");
-        for (int i = 1; i <= ambika::kNumModulations; ++i)
-        {
-            const auto m = "mod" + n (i);
-            modulationRows.push_back ({ &control (*matrix, m + "_source", {}, ControlStyle::Combo),
-                                        &control (*matrix, m + "_destination", {}, ControlStyle::Combo),
-                                        &control (*matrix, m + "_amount", {}, ControlStyle::Bar) });
-        }
-        matrix->onPaint = [this] (juce::Graphics& g)
-        {
-            paintTable (g, *matrix, ambika::kNumModulations, { { "Source", 180 }, { "Destination", 200 }, { "Amount", 250 } });
-            g.setColour (Palette::faintText);
-            g.setFont (juce::Font (eurekaFont (11.0f)));
-            g.drawText ("Slot 14 is scaled by the mod wheel, as on the hardware.", kTableLeft,
-                        matrix->getHeight() - 26, 400, 16, juce::Justification::centredLeft);
+            const char* id;
+            const char* label;
+            const char* shortName;
         };
 
-        modifiers = &panel ("Modifiers");
-        for (int i = 1; i <= ambika::kNumModifiers; ++i)
+        juce::String lower (const juce::String& s) { return s.toLowerCase(); }
+
+        const ambika::plugin::ParameterInfo* findParameterInfo (const juce::String& engineId)
         {
-            const auto m = "modifier" + n (i);
-            modifierRows.push_back ({ &control (*modifiers, m + "_in1", {}, ControlStyle::Combo),
-                                      &control (*modifiers, m + "_operator", {}, ControlStyle::Combo),
-                                      &control (*modifiers, m + "_in2", {}, ControlStyle::Combo) });
+            for (int i = 0; i < ambika::plugin::NumParameters(); ++i)
+                if (engineId == ambika::plugin::GetParameter (i).id)
+                    return &ambika::plugin::GetParameter (i);
+            return nullptr;
         }
-        modifiers->onPaint = [this] (juce::Graphics& g)
+
+        double shaped (double t)
         {
-            paintTable (g, *modifiers, ambika::kNumModifiers, { { "Input 1", 135 }, { "Operator", 110 }, { "Input 2", 135 } });
-            g.setColour (Palette::faintText);
-            g.setFont (juce::Font (eurekaFont (11.0f)));
-            g.drawFittedText ("Each modifier combines two sources into a new one (mod. 1 to mod. 4), "
-                              "usable in the matrix.\n\nSeq. 1/2 and arp sources stay at zero: the sequencer "
-                              "and arpeggiator are not part of this version.",
-                              juce::Rectangle<int> (16, kTableTop + ambika::kNumModifiers * kRowHeight + 16,
-                                                    modifiers->getWidth() - 32, 90),
-                              juce::Justification::topLeft, 6);
-        };
-    }
-
-    void ModulationPage::resized()
-    {
-        auto area = getLocalBounds().reduced (kMargin);
-        matrix->setBounds (area.removeFromLeft (700).withHeight (kTableTop + ambika::kNumModulations * kRowHeight + 40));
-        area.removeFromLeft (16);
-        modifiers->setBounds (area.withHeight (kTableTop + ambika::kNumModifiers * kRowHeight + 130));
-
-        auto layoutRows = [] (std::vector<std::array<ParameterControl*, 3>>& rows, std::array<int, 3> widths)
-        {
-            int y = kTableTop;
-            for (auto& row : rows)
-            {
-                int x = kTableLeft;
-                for (size_t c = 0; c < 3; ++c)
-                {
-                    row[c]->setBounds (x, y + 3, widths[c] - 10, kRowHeight - 6);
-                    x += widths[c];
-                }
-                y += kRowHeight;
-            }
-        };
-        layoutRows (modulationRows, { 180, 200, 250 });
-        layoutRows (modifierRows, { 135, 110, 135 });
-    }
-
-    //==============================================================================
-    namespace
-    {
-        constexpr int kCardHeight = 200;
-        constexpr int kSplitRowHeight = 46;
-        constexpr int kSplitTop = 52;
-        constexpr int kSplitLow = 150, kSplitHigh = 318, kSplitRange = 486;
-        constexpr int kCardTop = 34;
-    }
-
-    MultiPage::MultiPage (APVTS& s, AmbikaAudioProcessor& p, std::function<void (int)> editPart)
-        : Page (s), processor (p)
-    {
-        cards = &panel ("Voice cards");
-        for (int v = 0; v < kNumVoices; ++v)
-        {
-            owners[(size_t) v] = &control (*cards, voicePartId (v), "Plays", ControlStyle::Combo, false);
-            auto& edit = editButtons[(size_t) v];
-            edit = std::make_unique<juce::TextButton> ("Edit part");
-            edit->onClick = [this, editPart, v]
-            {
-                const auto owner = processor.voiceOwner (v);
-                if (owner < kNumParts)
-                    editPart (owner);
-            };
-            cards->addAndMakeVisible (*edit);
-        }
-        cards->onPaint = [this] (juce::Graphics& g) { paintCards (g); };
-
-        allocation = &panel ("Voice allocation");
-        voiceMode = &control (*allocation, kVoiceModeId, "Voice mode", ControlStyle::Combo, false);
-        unison = &control (*allocation, kUnisonId, "Unison", ControlStyle::Knob, false);
-        allocationReader = std::make_unique<ParameterReader> (
-            state, std::vector<juce::String> { kVoiceModeId, kUnisonId }, false);
-        allocation->onPaint = [this] (juce::Graphics& g) { paintAllocation (g); };
-
-        splits = &panel ("Keyboard splits");
-        for (int part = 0; part < kNumParts; ++part)
-        {
-            auto& row = splitRows[(size_t) part];
-            row.low = &control (*splits, partKeyLowId (part), {}, ControlStyle::Bar, false);
-            row.high = &control (*splits, partKeyHighId (part), {}, ControlStyle::Bar, false);
-            row.range = &display<KeyRangeDisplay> (*splits, state, part);
-        }
-        splits->onPaint = [this] (juce::Graphics& g) { paintSplits (g); };
-        shownOwners.fill (0xfe);
-    }
-
-    juce::Rectangle<int> MultiPage::cardBounds (int voice) const
-    {
-        auto c = cards->content().withTrimmedTop (kCardTop - 20);
-        const int w = c.getWidth() / kNumVoices;
-        return { c.getX() + w * voice + 5, c.getY(), w - 10, kCardHeight };
-    }
-
-    void MultiPage::resized()
-    {
-        auto area = getLocalBounds().reduced (kMargin);
-        cards->setBounds (area.removeFromTop (kCardHeight + 76));
-        for (int v = 0; v < kNumVoices; ++v)
-        {
-            auto card = cardBounds (v).reduced (12, 0);
-            owners[(size_t) v]->setBounds (card.getX(), card.getY() + 104, card.getWidth(), 44);
-            editButtons[(size_t) v]->setBounds (card.getX(), card.getY() + kCardHeight - 46, card.getWidth(), 28);
-        }
-        area.removeFromTop (12);
-        auto bottom = area;
-        allocation->setBounds (bottom.removeFromLeft (420));
-        auto c = allocation->content();
-        auto controlsArea = c.removeFromTop (104);
-        voiceMode->setBounds (controlsArea.removeFromLeft (190).removeFromTop (46));
-        controlsArea.removeFromLeft (40);
-        unison->setBounds (controlsArea.removeFromLeft (100));
-        bottom.removeFromLeft (16);
-        splits->setBounds (bottom);
-        for (int part = 0; part < kNumParts; ++part)
-        {
-            auto& row = splitRows[(size_t) part];
-            const int y = kSplitTop + part * kSplitRowHeight;
-            row.low->setBounds (kSplitLow, y + 9, 156, 28);
-            row.high->setBounds (kSplitHigh, y + 9, 156, 28);
-            row.range->setBounds (kSplitRange, y + 9, splits->getWidth() - kSplitRange - 16, 28);
+            return (1.0 - std::exp (-4.0 * t)) / (1.0 - std::exp (-4.0));
         }
     }
 
-    void MultiPage::paintCards (juce::Graphics& g)
-    {
-        for (int v = 0; v < kNumVoices; ++v)
-        {
-            const auto owner = shownOwners[(size_t) v];
-            const bool assigned = owner < kNumParts;
-            const auto colour = assigned ? Palette::part (owner) : Palette::faintText;
-            auto card = cardBounds (v).toFloat();
-            g.setColour (Palette::panelRaised.withAlpha (0.6f));
-            g.fillRoundedRectangle (card, 8.0f);
-            g.setColour (colour.withAlpha (assigned ? 0.8f : 0.3f));
-            g.fillRoundedRectangle (card.removeFromTop (5.0f), 2.0f);
-
-            // Voice number and activity LED.
-            g.setColour (Palette::text);
-            g.setFont (juce::Font (eurekaFont (15.0f, juce::Font::bold)));
-            g.drawText ("Voice " + juce::String (v + 1),
-                        juce::Rectangle<float> (card.getX() + 12.0f, card.getY() + 10.0f, 100.0f, 22.0f),
-                        juce::Justification::centredLeft);
-            const auto led = juce::Rectangle<float> (14.0f, 14.0f).withCentre ({ card.getRight() - 20.0f, card.getY() + 21.0f });
-            g.setColour (Palette::track);
-            g.fillEllipse (led);
-            g.setColour (colour.withAlpha (juce::jlimit (0.0f, 1.0f, shownLevels[(size_t) v] / 255.0f * 1.5f)));
-            g.fillEllipse (led);
-            g.setColour (colour.withAlpha (0.5f));
-            g.drawEllipse (led, 1.0f);
-
-            // The patch this card plays.
-            g.setColour (Palette::dimText);
-            g.setFont (juce::Font (eurekaFont (11.5f)));
-            g.drawText ("Patch", juce::Rectangle<float> (card.getX() + 12.0f, card.getY() + 42.0f, card.getWidth() - 24.0f, 16.0f),
-                        juce::Justification::centredLeft);
-            g.setColour (assigned ? colour : Palette::faintText);
-            g.setFont (juce::Font (eurekaFont (15.0f, juce::Font::bold)));
-            g.drawFittedText (assigned ? shownNames[owner] : juce::String ("off"),
-                              juce::Rectangle<float> (card.getX() + 12.0f, card.getY() + 58.0f, card.getWidth() - 24.0f, 36.0f)
-                                  .toNearestInt(),
-                              juce::Justification::topLeft, 2);
-        }
-        g.setColour (Palette::faintText);
-        g.setFont (juce::Font (eurekaFont (11.5f)));
-        g.drawText ("Choose the part (patch) each voice card plays. Cards on the same part share its patch; "
-                    "a card set to off is silent.",
-                    cards->content().withTrimmedTop (kCardHeight + kCardTop - 10).withHeight (22), juce::Justification::centred);
-    }
-
-    void MultiPage::paintAllocation (juce::Graphics& g)
-    {
-        const int mode = allocationReader->value (0);
-        const int voices = juce::jmax (1, allocationReader->value (1));
-        auto text = allocation->content().withTrimmedTop (112);
-        juce::String title, description;
-        switch (mode)
-        {
-            case 1:
-                title = "Cyclic";
-                description = "Notes step through the voice cards in order, 1, 2, 3 ... 6, whatever part each card "
-                              "plays, so successive notes can cycle through different patches.";
-                break;
-            case 2:
-                title = "Poly";
-                description = "Each note takes the free card that has rested longest; when all are busy the "
-                              "oldest note is stolen.";
-                break;
-            default:
-                title = "Per part";
-                description = "Every part plays every note on its own cards, using its Voicing (poly, mono, "
-                              "2x unison, cyclic) from the Synth page. Parts that own cards layer.";
-                break;
-        }
-        if (mode != 0)
-            description += voices > 1 ? " Unison " + juce::String (voices) + ": each note plays " + juce::String (voices)
-                                             + " cards at once (detuned by each part's Spread)."
-                                       : " Raise Unison to play 2-6 cards per note.";
-        else
-            description += " Unison applies to Cyclic and Poly.";
-        g.setColour (Palette::text);
-        g.setFont (juce::Font (eurekaFont (14.0f, juce::Font::bold)));
-        g.drawText (title, text.removeFromTop (22), juce::Justification::topLeft);
-        g.setColour (Palette::dimText);
-        g.setFont (juce::Font (eurekaFont (12.5f)));
-        g.drawFittedText (description, text.removeFromTop (140), juce::Justification::topLeft, 8);
-    }
-
-    void MultiPage::paintSplits (juce::Graphics& g)
-    {
-        g.setFont (juce::Font (eurekaFont (11.5f)));
-        g.setColour (Palette::dimText);
-        g.drawText ("Lowest key", kSplitLow, kSplitTop - 22, 150, 18, juce::Justification::centredLeft);
-        g.drawText ("Highest key", kSplitHigh, kSplitTop - 22, 150, 18, juce::Justification::centredLeft);
-        g.drawText ("Range", kSplitRange, kSplitTop - 22, 150, 18, juce::Justification::centredLeft);
-        for (int part = 0; part < kNumParts; ++part)
-        {
-            const int y = kSplitTop + part * kSplitRowHeight;
-            bool owns = false;
-            for (auto owner : shownOwners)
-                owns = owns || owner == part;
-            if (part % 2 == 0)
-            {
-                g.setColour (Palette::panelRaised.withAlpha (0.5f));
-                g.fillRoundedRectangle (8.0f, (float) y, (float) splits->getWidth() - 16.0f, (float) kSplitRowHeight, 4.0f);
-            }
-            g.setColour (Palette::part (part).withAlpha (owns ? 1.0f : 0.3f));
-            g.fillRoundedRectangle (16.0f, (float) y + 16.0f, 12.0f, 12.0f, 3.0f);
-            g.setColour (owns ? Palette::text : Palette::faintText);
-            g.setFont (juce::Font (eurekaFont (13.0f, juce::Font::bold)));
-            g.drawText ("Part " + juce::String (part + 1), 36, y + 4, 100, 18, juce::Justification::centredLeft);
-            g.setColour (owns ? Palette::part (part) : Palette::faintText);
-            g.setFont (juce::Font (eurekaFont (11.0f)));
-            g.drawText (owns ? shownNames[(size_t) part] : juce::String ("no voice cards"), 36, y + 22, 108, 16,
-                        juce::Justification::centredLeft, true);
-        }
-        g.setColour (Palette::faintText);
-        g.setFont (juce::Font (eurekaFont (11.0f)));
-        g.drawText ("A part only plays notes inside its range, in every voice mode. "
-                    "A low key above the high key plays outside the range.",
-                    16, splits->getHeight() - 26, splits->getWidth() - 32, 16, juce::Justification::centredLeft);
-    }
-
-    void MultiPage::poll()
-    {
-        Page::poll();
-        bool changed = false;
-        for (int v = 0; v < kNumVoices; ++v)
-        {
-            const auto level = processor.voiceLevel (v);
-            const auto owner = processor.voiceOwner (v);
-            changed |= level != shownLevels[(size_t) v] || owner != shownOwners[(size_t) v];
-            shownLevels[(size_t) v] = level;
-            shownOwners[(size_t) v] = owner;
-        }
-        for (int part = 0; part < kNumParts; ++part)
-        {
-            auto name = processor.presets().presetName (part);
-            if (processor.presets().isModified (part))
-                name += " *";
-            changed |= name != shownNames[(size_t) part];
-            shownNames[(size_t) part] = name;
-        }
-        if (changed)
-        {
-            cards->repaint();
-            splits->repaint();
-        }
-        if (allocationReader->poll())
-        {
-            unison->setEnabled (allocationReader->value (0) != 0);
-            allocation->repaint();
-        }
-    }
-
-    //==============================================================================
-    namespace
-    {
-        // User preferences (not per project): ~/Library/Application Support/eureka.
-        std::unique_ptr<juce::PropertiesFile> openSettings()
-        {
-            juce::PropertiesFile::Options options;
-            options.applicationName = "eureka";
-            options.folderName = "eureka";
-            options.filenameSuffix = ".settings";
-            options.osxLibrarySubFolder = "Application Support";
-            return std::make_unique<juce::PropertiesFile> (options);
-        }
-
-        Palette::Theme loadThemePreference()
-        {
-            return openSettings()->getValue ("theme", "dark") == "light" ? Palette::Theme::Light : Palette::Theme::Dark;
-        }
-
-        void saveThemePreference (Palette::Theme theme)
-        {
-            auto settings = openSettings();
-            settings->setValue ("theme", theme == Palette::Theme::Light ? "light" : "dark");
-            settings->saveIfNeeded();
-        }
-
-        // Highlight colours: "accent1".."accent6" as hex, absent = theme colour.
-        void loadHighlightPreferences()
-        {
-            auto settings = openSettings();
-            for (int i = 0; i < kNumParts; ++i)
-            {
-                const auto hex = settings->getValue ("accent" + juce::String (i + 1));
-                Palette::setPartOverride (i, hex.isEmpty() ? std::optional<juce::Colour>()
-                                                           : std::optional<juce::Colour> (juce::Colour::fromString (hex)));
-            }
-        }
-
-        void saveHighlightPreferences()
-        {
-            auto settings = openSettings();
-            for (int i = 0; i < kNumParts; ++i)
-            {
-                const auto key = "accent" + juce::String (i + 1);
-                if (const auto colour = Palette::partOverride (i))
-                    settings->setValue (key, colour->toString());
-                else
-                    settings->removeValue (key);
-            }
-            settings->saveIfNeeded();
-        }
-
-        // "#ff8800", "ff8800" or "#f80"; nothing for anything else.
-        std::optional<juce::Colour> parseHex (juce::String text)
-        {
-            text = text.trim().trimCharactersAtStart ("#");
-            if (! text.containsOnly ("0123456789abcdefABCDEF"))
-                return {};
-            if (text.length() == 3)
-                text = juce::String::charToString (text[0]) + text[0] + text[1] + text[1] + text[2] + text[2];
-            if (text.length() != 6)
-                return {};
-            return juce::Colour ((juce::uint32) (0xff000000u | (juce::uint32) text.getHexValue32()));
-        }
-
-        juce::String toHex (juce::Colour colour)
-        {
-            return "#" + colour.toDisplayString (false).toUpperCase();
-        }
-
-        // Header button: a swatch of the edited part's highlight colour.
-        class HighlightButton final : public juce::Button
-        {
-        public:
-            HighlightButton() : juce::Button ("highlight")
-            {
-                setTooltip ("Change the highlight colour (hex code)");
-            }
-
-            void paintButton (juce::Graphics& g, bool over, bool) override
-            {
-                auto area = getLocalBounds().toFloat().reduced (1.0f);
-                Palette::fillMetal (g, area, 5.0f);
-                if (over)
-                {
-                    g.setColour (juce::Colours::white.withAlpha (0.08f));
-                    g.fillRoundedRectangle (area, 5.0f);
-                }
-                const auto swatch = juce::Rectangle<float> (14.0f, 14.0f).withCentre (area.getCentre());
-                g.setColour (findColour (juce::Slider::rotarySliderFillColourId));
-                g.fillEllipse (swatch);
-                g.setColour (Palette::outline.darker (0.3f));
-                g.drawEllipse (swatch, 1.0f);
-            }
-        };
-
-        // The pop-up: a hex field for the edited part (or all parts).
-        class HighlightEditor final : public juce::Component
-        {
-        public:
-            HighlightEditor (int partIndex, std::function<void()> changed)
-                : part (partIndex), onChanged (std::move (changed))
-            {
-                title.setText ("Highlight colour - part " + juce::String (part + 1), juce::dontSendNotification);
-                title.setFont (juce::Font (eurekaFont (13.0f, juce::Font::bold)));
-                addAndMakeVisible (title);
-
-                hex.setText (toHex (Palette::part (part)), false);
-                hex.setFont (juce::Font (eurekaFont (14.0f)));
-                hex.setInputRestrictions (7, "#0123456789abcdefABCDEF");
-                hex.setJustification (juce::Justification::centredLeft);
-                hex.onTextChange = [this] { repaint(); };
-                hex.onReturnKey = [this] { apply(); };
-                addAndMakeVisible (hex);
-
-                allParts.setButtonText ("All parts");
-                allParts.setClickingTogglesState (true);
-                addAndMakeVisible (allParts);
-                applyButton.onClick = [this] { apply(); };
-                addAndMakeVisible (applyButton);
-                resetButton.setTooltip ("Back to the theme's colours (every part)");
-                resetButton.onClick = [this]
-                {
-                    for (int i = 0; i < kNumParts; ++i)
-                        Palette::setPartOverride (i, {});
-                    saveHighlightPreferences();
-                    hex.setText (toHex (Palette::part (part)), false);
-                    onChanged();
-                    repaint();
-                };
-                addAndMakeVisible (resetButton);
-                setSize (260, 118);
-            }
-
-            void paint (juce::Graphics& g) override
-            {
-                const auto colour = parseHex (hex.getText());
-                g.setColour (colour.value_or (Palette::panelRaised));
-                g.fillRoundedRectangle (swatch.toFloat(), 5.0f);
-                g.setColour (Palette::outline);
-                g.drawRoundedRectangle (swatch.toFloat(), 5.0f, 1.0f);
-                if (! colour)
-                {
-                    g.setColour (Palette::faintText);
-                    g.setFont (juce::Font (eurekaFont (10.0f)));
-                    g.drawText ("?", swatch, juce::Justification::centred);
-                }
-            }
-
-            void resized() override
-            {
-                auto area = getLocalBounds().reduced (10);
-                title.setBounds (area.removeFromTop (20));
-                area.removeFromTop (6);
-                auto row = area.removeFromTop (28);
-                swatch = row.removeFromLeft (28);
-                row.removeFromLeft (8);
-                hex.setBounds (row.removeFromLeft (110));
-                row.removeFromLeft (8);
-                allParts.setBounds (row);
-                area.removeFromTop (8);
-                auto buttons = area.removeFromTop (28);
-                resetButton.setBounds (buttons.removeFromLeft (80));
-                applyButton.setBounds (buttons.removeFromRight (80));
-            }
-
-        private:
-            void apply()
-            {
-                const auto colour = parseHex (hex.getText());
-                if (! colour)
-                {
-                    hex.setColour (juce::TextEditor::outlineColourId, juce::Colour (0xfff0647a));
-                    hex.repaint();
-                    return;
-                }
-                hex.setColour (juce::TextEditor::outlineColourId, Palette::outline);
-                hex.setText (toHex (*colour), false);
-                for (int i = 0; i < kNumParts; ++i)
-                    if (allParts.getToggleState() || i == part)
-                        Palette::setPartOverride (i, *colour);
-                saveHighlightPreferences();
-                onChanged();
-            }
-
-            int part;
-            std::function<void()> onChanged;
-            juce::Label title;
-            juce::TextEditor hex;
-            juce::TextButton allParts, applyButton { "Apply" }, resetButton { "Reset" };
-            juce::Rectangle<int> swatch;
-        };
-
-        // Header button: a moon in dark mode, a sun in light mode.
-        class ThemeToggle final : public juce::Button
-        {
-        public:
-            ThemeToggle() : juce::Button ("theme")
-            {
-                setTooltip ("Switch between dark and light mode");
-            }
-
-            void paintButton (juce::Graphics& g, bool over, bool) override
-            {
-                auto area = getLocalBounds().toFloat().reduced (1.0f);
-                Palette::fillMetal (g, area, 5.0f);
-                if (over)
-                {
-                    g.setColour (juce::Colours::white.withAlpha (0.08f));
-                    g.fillRoundedRectangle (area, 5.0f);
-                }
-                const auto centre = area.getCentre();
-                g.setColour (Palette::text);
-                if (Palette::theme() == Palette::Theme::Dark)
-                {
-                    // Moon: a disc with an offset disc cut out.
-                    juce::Path moon;
-                    moon.addEllipse (juce::Rectangle<float> (14.0f, 14.0f).withCentre (centre));
-                    juce::Path cut;
-                    cut.addEllipse (juce::Rectangle<float> (12.0f, 12.0f).withCentre (centre.translated (4.5f, -3.5f)));
-                    moon.setUsingNonZeroWinding (false);
-                    moon.addPath (cut);
-                    g.reduceClipRegion (moon);
-                    g.fillEllipse (juce::Rectangle<float> (14.0f, 14.0f).withCentre (centre));
-                }
-                else
-                {
-                    g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (centre));
-                    for (int i = 0; i < 8; ++i)
-                    {
-                        const float angle = juce::MathConstants<float>::twoPi * (float) i / 8.0f;
-                        g.drawLine ({ centre.getPointOnCircumference (6.5f, angle),
-                                      centre.getPointOnCircumference (9.0f, angle) }, 1.5f);
-                    }
-                }
-            }
-        };
-    }
-
-    //==============================================================================
-    // Everything inside the window, at design size; the editor scales it.
-    class AmbikaAudioProcessorEditor::Content final : public juce::Component
-    {
-    public:
-        Content (AmbikaAudioProcessor& p, std::function<void (int)> showPageFn, std::function<void (int)> editPartFn,
-                 std::function<void()> toggleThemeFn, std::function<void (juce::Component&)> showHighlightsFn)
-            : processor (p),
-              presetContext { p.presets(), [&p] { return p.editedPart(); },
-                              [this] (const juce::String& text, bool isError) { showToast (text, isError); },
-                              [this] { if (browser.isVisible()) browser.refresh(); } },
-              dialog (presetContext),
-              bar (presetContext, dialog, [this, showPageFn] { showPageFn (currentPage == 3 ? lastPage : 3); }),
-              browser (presetContext, dialog),
-              synth (p.parameters()),
-              modulation (p.parameters()),
-              multi (p.parameters(), p, [showPageFn, editPartFn] (int part) { editPartFn (part); showPageFn (0); }),
-              output (p.parameters(), kOutputGainId, {}, ControlStyle::Bar, false)
-        {
-            const char* names[] = { "Synth", "Mod", "Multi" };
-            for (int i = 0; i < 3; ++i)
-            {
-                auto& b = pageButtons[(size_t) i];
-                b.setButtonText (names[i]);
-                b.onClick = [showPageFn, i] { showPageFn (i); };
-                addAndMakeVisible (b);
-            }
-            for (int i = 0; i < kNumParts; ++i)
-            {
-                auto& b = partButtons[(size_t) i];
-                b.setButtonText (n (i + 1));
-                b.setColour (juce::TextButton::buttonOnColourId, Palette::part (i));
-                b.setColour (juce::TextButton::textColourOffId, Palette::part (i));
-                b.setTooltip ("Edit part " + n (i + 1));
-                b.onClick = [editPartFn, i] { editPartFn (i); };
-                addAndMakeVisible (b);
-            }
-            addAndMakeVisible (synth);
-            addChildComponent (modulation);
-            addChildComponent (multi);
-            addChildComponent (browser);
-            addAndMakeVisible (output);
-            themeToggle.onClick = std::move (toggleThemeFn);
-            addAndMakeVisible (themeToggle);
-            highlightButton.onClick = [this, showHighlightsFn] { showHighlightsFn (highlightButton); };
-            addAndMakeVisible (highlightButton);
-            addAndMakeVisible (bar);
-            addChildComponent (dialog);
-        }
-
-        void showSaveDialog() { dialog.openForSave(); }
-        int page() const { return currentPage; }
-
-        void showToast (const juce::String& text, bool isError)
-        {
-            toastText = text;
-            toastIsError = isError;
-            const int id = ++toastId;
-            repaint (toastArea());
-            juce::Component::SafePointer<Content> safe (this);
-            juce::Timer::callAfterDelay (isError ? 5000 : 2500, [safe, id]
-            {
-                if (safe != nullptr && safe->toastId == id)
-                {
-                    safe->toastText.clear();
-                    safe->repaint (safe->toastArea());
-                }
-            });
-        }
-
-        juce::Rectangle<int> toastArea() const
-        {
-            return getLocalBounds().removeFromBottom (54).withSizeKeepingCentre (560, 34);
-        }
-
-        void paintOverChildren (juce::Graphics& g) override
-        {
-            if (toastText.isEmpty() || dialog.isVisible())
-                return;
-            const auto area = toastArea().toFloat();
-            g.setColour (Palette::panelRaised.withAlpha (0.97f));
-            g.fillRoundedRectangle (area, 8.0f);
-            g.setColour (toastIsError ? juce::Colour (0xfff0647a) : accentOf (*this));
-            g.drawRoundedRectangle (area.reduced (0.5f), 8.0f, 1.0f);
-            g.setColour (Palette::text);
-            g.setFont (juce::Font (eurekaFont (13.0f)));
-            g.drawFittedText (toastText, area.toNearestInt().reduced (14, 0), juce::Justification::centred, 1);
-        }
-
-        void paint (juce::Graphics& g) override
-        {
-            const auto& skin = currentSkin();
-            g.fillAll (Palette::background);
-            if (const auto& background = skin.backgroundFor (currentPage); background.isValid())
-                g.drawImage (background, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
-
-            const auto header = getLocalBounds().removeFromTop (kHeaderHeight);
-            // Brushed metal strip.
-            Palette::fillMetal (g, header.toFloat(), 0.0f, false, skin.settings.headerOpacity);
-            g.setColour (Palette::outline.withMultipliedAlpha (skin.settings.headerOpacity));
-            g.drawHorizontalLine (kHeaderHeight - 1, 0.0f, (float) getWidth());
-
-            if (skin.logo.isValid())
-            {
-                g.drawImage (skin.logo, juce::Rectangle<float> (16.0f, 6.0f, 230.0f, 52.0f),
-                             juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid
-                                 | juce::RectanglePlacement::onlyReduceInSize);
-            }
-            else
-            {
-                // Logo icon, then the wordmark.
-                const auto icon = juce::Rectangle<float> (12.0f, 7.0f, 50.0f, 50.0f);
-                {
-                    juce::Graphics::ScopedSaveState save (g);
-                    juce::Path clip;
-                    clip.addRoundedRectangle (icon, 8.0f);
-                    g.reduceClipRegion (clip);
-                    g.drawImage (eurekaLogo(), icon, juce::RectanglePlacement::centred | juce::RectanglePlacement::fillDestination);
-                }
-                g.setColour (Palette::outline);
-                g.drawRoundedRectangle (icon, 8.0f, 1.0f);
-
-                const int x = 72;
-                g.setColour (Palette::text);
-                g.setFont (juce::Font (eurekaFont (28.0f, juce::Font::bold)));
-                const auto wordmark = juce::String ("eureka");
-                const int wordWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), wordmark);
-                g.drawText (wordmark, x, 6, wordWidth + 4, 34, juce::Justification::centredLeft);
-                g.setColour (accentOf (*this));
-                g.drawText ("!", x + wordWidth + 1, 6, 20, 34, juce::Justification::centredLeft);
-                g.setColour (Palette::faintText);
-                g.setFont (juce::Font (eurekaFont (10.0f)));
-                g.drawText ("Tootable Instruments", x + 1, 38, 190, 16, juce::Justification::centredLeft, true);
-            }
-
-            g.setColour (Palette::dimText);
-            g.setFont (juce::Font (eurekaFont (11.0f)));
-            g.drawText ("EDIT PART", partButtons[0].getX() - 76, 0, 68, kHeaderHeight, juce::Justification::centredRight);
-            g.drawText ("VOICES", voiceLedsArea.getX() - 54, 0, 46, kHeaderHeight, juce::Justification::centredRight);
-            g.drawText ("OUT", output.getX() - 36, 0, 28, kHeaderHeight, juce::Justification::centredRight);
-
-            // Voice LEDs, in the colour of the part that owns each voice.
-            const int step = voiceLedsArea.getWidth() / kNumVoices;
-            for (int v = 0; v < kNumVoices; ++v)
-            {
-                const auto owner = processor.voiceOwner (v);
-                const auto colour = owner < kNumParts ? Palette::part (owner) : Palette::faintText;
-                const auto led = juce::Rectangle<float> (11.0f, 11.0f)
-                                     .withCentre ({ (float) voiceLedsArea.getX() + (float) step * ((float) v + 0.5f),
-                                                    (float) voiceLedsArea.getCentreY() });
-                g.setColour (Palette::track);
-                g.fillEllipse (led);
-                g.setColour (colour.withAlpha (juce::jlimit (0.0f, 1.0f, shownLevels[(size_t) v] / 255.0f * 1.5f)));
-                g.fillEllipse (led);
-                g.setColour (colour.withAlpha (0.5f));
-                g.drawEllipse (led, 1.0f);
-            }
-        }
-
-        void resized() override
-        {
-            auto header = getLocalBounds().removeFromTop (kHeaderHeight).reduced (16, 16);
-            header.removeFromLeft (258);
-            for (auto& b : pageButtons)
-            {
-                b.setBounds (header.removeFromLeft (70));
-                header.removeFromLeft (6);
-            }
-            auto right = header;
-            themeToggle.setBounds (right.removeFromRight (32));
-            right.removeFromRight (6);
-            highlightButton.setBounds (right.removeFromRight (32));
-            right.removeFromRight (12);
-            output.setBounds (right.removeFromRight (100));
-            right.removeFromRight (44);
-            voiceLedsArea = right.removeFromRight (108);
-            right.removeFromRight (62);
-            for (int i = kNumParts - 1; i >= 0; --i)
-            {
-                partButtons[(size_t) i].setBounds (right.removeFromRight (31));
-                right.removeFromRight (4);
-            }
-
-            bar.setBounds (0, kHeaderHeight, getWidth(), kPresetBarHeight);
-            const auto pageArea = getLocalBounds().withTrimmedTop (kPagesTop);
-            synth.setBounds (pageArea);
-            modulation.setBounds (pageArea);
-            multi.setBounds (pageArea);
-            browser.setBounds (pageArea);
-            dialog.setBounds (getLocalBounds());
-        }
-
-        void showPage (int index)
-        {
-            if (currentPage != 3)
-                lastPage = currentPage;
-            currentPage = index;
-            synth.setVisible (index == 0);
-            modulation.setVisible (index == 1);
-            multi.setVisible (index == 2);
-            browser.setVisible (index == 3);
-            bar.setBrowserOpen (index == 3);
-            if (currentSkin().pageBackgrounds[(size_t) juce::jlimit (0, 3, index)].isValid())
-                repaint();  // Page-specific background.
-            for (int i = 0; i < 3; ++i)
-                pageButtons[(size_t) i].setToggleState (i == index, juce::dontSendNotification);
-        }
-
-        // After the highlight colours change.
-        void refreshPartColours()
-        {
-            for (int i = 0; i < kNumParts; ++i)
-            {
-                partButtons[(size_t) i].setColour (juce::TextButton::buttonOnColourId, Palette::part (i));
-                partButtons[(size_t) i].setColour (juce::TextButton::textColourOffId, Palette::part (i));
-            }
-            repaint();
-        }
-
-        void setEditedPart (int part)
-        {
-            for (int i = 0; i < kNumParts; ++i)
-                partButtons[(size_t) i].setToggleState (i == part, juce::dontSendNotification);
-            synth.bindPart (part);
-            modulation.bindPart (part);
-            if (browser.isVisible())
-                browser.repaint();
-        }
-
-        void poll()
-        {
-            Page* pages[] = { &synth, &modulation, &multi };
-            for (auto* page : pages)
-                if (page->isVisible())
-                    page->poll();
-            bool changed = false;
-            for (int v = 0; v < kNumVoices; ++v)
-            {
-                const auto level = processor.voiceLevel (v);
-                changed |= level != shownLevels[(size_t) v];
-                shownLevels[(size_t) v] = level;
-            }
-            if (changed)
-                repaint (voiceLedsArea.expanded (8));
-            bar.poll();
-        }
-
-    private:
-        AmbikaAudioProcessor& processor;
-        PresetContext presetContext;
-        PresetDialog dialog;
-        PresetBar bar;
-        PresetBrowserPage browser;
-        int currentPage = 0, lastPage = 0;
-        juce::String toastText;
-        bool toastIsError = false;
-        int toastId = 0;
-        std::array<juce::TextButton, 3> pageButtons;
-        std::array<juce::TextButton, kNumParts> partButtons;
-        SynthPage synth;
-        ModulationPage modulation;
-        MultiPage multi;
-        ParameterControl output;
-        ThemeToggle themeToggle;
-        HighlightButton highlightButton;
-        juce::Rectangle<int> voiceLedsArea;
-        std::array<uint8_t, kNumVoices> shownLevels {};
-    };
-
-    //==============================================================================
+    //==========================================================================
     AmbikaAudioProcessorEditor::AmbikaAudioProcessorEditor (AmbikaAudioProcessor& p)
-        : AudioProcessorEditor (&p), audioProcessor (p)
+        : AudioProcessorEditor (p), audioProcessor (p), state (p.parameters()), presets (p.presets())
     {
-        // Skin images are read when the window opens (never during a host's
-        // plug-in scan), so edits show up the next time the window opens.
-        setCurrentSkin (Skin::load());
-        Palette::setTheme (loadThemePreference());
-        loadHighlightPreferences();
-        lookAndFeel.applyTheme();
-        setLookAndFeel (&lookAndFeel);
-        buildContent (0);
-
-        setResizable (true, true);
-        setResizeLimits (designWidth * 6 / 10, designHeight * 6 / 10, designWidth * 2, designHeight * 2);
-        getConstrainer()->setFixedAspectRatio ((double) designWidth / designHeight);
-        setSize (designWidth, designHeight);
+        zoomFactor = juce::jlimit (1, 3, p.editorZoom());
+        setOpaque (true);
+        setWantsKeyboardFocus (true);
+        buildPlate();
+        refreshLibrary();
+        setSize (canvasWidth * zoomFactor, canvasHeight * zoomFactor);
+        render();
+        canvas.toImage (image, zoomFactor);
+        shownPixels = canvas.pixels();
         startTimerHz (30);
     }
 
     AmbikaAudioProcessorEditor::~AmbikaAudioProcessorEditor()
     {
         stopTimer();
-        delete highlightBox.getComponent();
-        content.reset();
-        setLookAndFeel (nullptr);
+        if (dragParam != nullptr)
+            dragParam->endChangeGesture();
     }
 
-    void AmbikaAudioProcessorEditor::resized()
+    //==========================================================================
+    void AmbikaAudioProcessorEditor::paint (juce::Graphics& g)
     {
-        if (content == nullptr || getWidth() <= 0)
-            return;  // Not sized yet (constructor).
-        const float scale = (float) getWidth() / (float) designWidth;
-        content->setTransform (juce::AffineTransform::scale (scale));
+        g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
+        g.drawImageAt (image, 0, 0);
     }
+
+    void AmbikaAudioProcessorEditor::timerCallback()
+    {
+        refresh();
+    }
+
+    void AmbikaAudioProcessorEditor::refresh()
+    {
+        render();
+        if (canvas.pixels() != shownPixels || image.getWidth() != canvasWidth * zoomFactor)
+        {
+            shownPixels = canvas.pixels();
+            canvas.toImage (image, zoomFactor);
+            repaint();
+        }
+    }
+
+    const Canvas& AmbikaAudioProcessorEditor::renderCanvas()
+    {
+        render();
+        return canvas;
+    }
+
+    void AmbikaAudioProcessorEditor::render()
+    {
+        renderOnce();
+        // The display always follows a control of the page: pick the first one
+        // when the focused control is not on it (the presets page has none).
+        if (page != 3 && ! focusVisible() && knobs.size() > firstPageKnob)
+        {
+            focus = knobs[firstPageKnob];
+            renderOnce();
+        }
+    }
+
+    void AmbikaAudioProcessorEditor::renderOnce()
+    {
+        hits.clear();
+        knobs.clear();
+        canvas.unclip();
+        canvas.copyFrom (plateCache);
+        drawHeader();
+        firstPageKnob = knobs.size();
+        switch (page)
+        {
+            case 0: drawSynthPage(); break;
+            case 1: drawModPage(); break;
+            case 2: drawMultiPage(); break;
+            default: drawPresetsPage(); break;
+        }
+        drawDisplay();
+        if (dialog == Dialog::Init)
+            drawInitPopup();
+        else if (dialog != Dialog::None)
+            drawDialog();
+    }
+
+    bool AmbikaAudioProcessorEditor::focusVisible() const
+    {
+        if (focus.param == nullptr)
+            return false;
+        for (const auto& k : knobs)
+            if (k.param == focus.param && k.section == focus.section)
+                return true;
+        return false;
+    }
+
+    void AmbikaAudioProcessorEditor::buildPlate()
+    {
+        auto& c = plateCache;
+        c.plate();
+        c.well (24, 16, 104, 40);
+        c.fill (26, 18, 100, 36, BLK);
+        c.logo (32, 25, 2);
+        c.well (136, 16, 256, 40);
+        c.fill (140, 20, 248, 32, BLK);
+        c.well (400, 16, 216, 40);
+        c.fill (404, 20, 208, 32, BLK);
+    }
+
+    //==========================================================================
+    // Parameters
+
+    juce::RangedAudioParameter* AmbikaAudioProcessorEditor::parameter (const juce::String& id) const
+    {
+        return state.getParameter (id);
+    }
+
+    juce::RangedAudioParameter* AmbikaAudioProcessorEditor::partParameter (const juce::String& engineId) const
+    {
+        return parameter (partParameterId (audioProcessor.editedPart(), engineId));
+    }
+
+    int AmbikaAudioProcessorEditor::engineValue (const juce::String& engineId) const
+    {
+        return rawInt (partParameterId (audioProcessor.editedPart(), engineId));
+    }
+
+    int AmbikaAudioProcessorEditor::rawInt (const juce::String& id) const
+    {
+        if (auto* raw = state.getRawParameterValue (id))
+            return juce::roundToInt (raw->load());
+        return 0;
+    }
+
+    juce::String AmbikaAudioProcessorEditor::engineIdOf (const juce::String& parameterId)
+    {
+        if (parameterId.length() > 3 && parameterId[0] == 'p' && juce::CharacterFunctions::isDigit (parameterId[1])
+            && parameterId[2] == '_')
+            return parameterId.substring (3);
+        return parameterId;
+    }
+
+    int AmbikaAudioProcessorEditor::stepCount (const Knob& k)
+    {
+        if (k.maxIndex >= 0)
+            return k.maxIndex + 1;
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (k.param))
+            return choice->choices.size();
+        const auto& range = k.param->getNormalisableRange();
+        if (dynamic_cast<juce::AudioParameterFloat*> (k.param) != nullptr)
+            return juce::roundToInt ((range.end - range.start) / 0.5f) + 1;
+        return juce::roundToInt (range.end - range.start) + 1;
+    }
+
+    int AmbikaAudioProcessorEditor::indexOf (const Knob& k)
+    {
+        const auto& range = k.param->getNormalisableRange();
+        const float step = dynamic_cast<juce::AudioParameterFloat*> (k.param) != nullptr ? 0.5f : 1.0f;
+        const float raw = k.param->convertFrom0to1 (k.param->getValue());
+        return juce::jlimit (0, stepCount (k) - 1, juce::roundToInt ((raw - range.start) / step));
+    }
+
+    void AmbikaAudioProcessorEditor::setIndex (const Knob& k, int index)
+    {
+        const auto& range = k.param->getNormalisableRange();
+        const float step = dynamic_cast<juce::AudioParameterFloat*> (k.param) != nullptr ? 0.5f : 1.0f;
+        index = juce::jlimit (0, stepCount (k) - 1, index);
+        k.param->setValueNotifyingHost (k.param->convertTo0to1 (range.start + (float) index * step));
+    }
+
+    juce::String AmbikaAudioProcessorEditor::valueText (const juce::RangedAudioParameter* p) const
+    {
+        if (p == nullptr)
+            return {};
+        const auto engineId = engineIdOf (p->paramID);
+        const int raw = juce::roundToInt (p->convertFrom0to1 (p->getValue()));
+        if (engineId == "filter_variant")
+        {
+            const int model = rawInt (partParameterId (audioProcessor.editedPart(), "filter_model"));
+            if (model <= 0 || ambika::plugin::SurgeFilter::NumSubtypes (model) == 0)
+                return "-";
+            return lower (juce::String (ambika::plugin::SurgeFilter::SubtypeName (model, raw)));
+        }
+        if (engineId == "filter_model")
+        {
+            if (raw <= 0)
+                return "ambika svf";
+            return lower (juce::String (ambika::plugin::SurgeFilter::ModelName (raw)))
+                .replace ("surge ", "", true).trim();
+        }
+        if (dynamic_cast<const juce::AudioParameterFloat*> (p) != nullptr)
+            return juce::String::formatted ("%+.1f db", p->convertFrom0to1 (p->getValue()));
+        auto text = lower (p->getCurrentValueAsText());
+        if (dynamic_cast<const juce::AudioParameterInt*> (p) != nullptr && p->getNormalisableRange().start < 0
+            && raw > 0 && ! text.startsWithChar ('+'))
+            text = "+" + text;
+        return text;
+    }
+
+    void AmbikaAudioProcessorEditor::edited()
+    {
+        lastEditTime = juce::Time::getMillisecondCounter();
+    }
+
+    //==========================================================================
+    // Panel parts
+
+    void AmbikaAudioProcessorEditor::addHit (juce::Rectangle<int> area, std::function<void()> onClick)
+    {
+        Hit h;
+        h.area = area;
+        h.onClick = std::move (onClick);
+        hits.push_back (std::move (h));
+    }
+
+    void AmbikaAudioProcessorEditor::button (int x, int y, int w, const juce::String& label, bool on,
+                                             std::function<void()> onClick, bool withLed)
+    {
+        canvas.button (x, y, w, label, on, withLed);
+        addHit ({ x - 1, y - 1, w + 2, 18 }, std::move (onClick));
+    }
+
+    void AmbikaAudioProcessorEditor::sectionBand (int x, int y, int w, const juce::String& title, const juce::String& right)
+    {
+        canvas.band (x, y, w);
+        canvas.text3 (title, x + 4, y + 2, LT);
+        if (right.isNotEmpty())
+            canvas.text3 (right, x + w - 4 - Canvas::width3 (right), y + 2, MID);
+    }
+
+    void AmbikaAudioProcessorEditor::knob (int cx, int cy, int r, int labelBandY, juce::RangedAudioParameter* p,
+                                           const juce::String& label, const juce::String& shortName,
+                                           const juce::String& section, bool enabled, int maxIndex)
+    {
+        if (p == nullptr)
+            return;
+        Knob k;
+        k.param = p;
+        k.label = label;
+        k.shortName = shortName;
+        k.section = section;
+        k.enabled = enabled;
+        k.maxIndex = maxIndex;
+        if (const auto* info = findParameterInfo (engineIdOf (p->paramID)))
+            k.longName = lower (juce::String (info->name));
+        else
+            k.longName = lower (p->getName (32));
+        const int steps = stepCount (k);
+        const float value = steps > 1 ? (float) indexOf (k) / (float) (steps - 1) : 0.0f;
+        canvas.knob (cx, cy, r, value, enabled);
+        canvas.bandLabel (label, cx, labelBandY, focus.param == p, enabled);
+        knobs.push_back (k);
+        Hit h;
+        h.area = { cx - r - 4, cy - r - 4, 2 * r + 9, labelBandY + 10 - (cy - r - 4) };
+        h.knob = (int) knobs.size() - 1;
+        hits.push_back (std::move (h));
+    }
+
+    const AmbikaAudioProcessorEditor::Hit* AmbikaAudioProcessorEditor::hitAt (juce::Point<int> p) const
+    {
+        for (auto it = hits.rbegin(); it != hits.rend(); ++it)
+            if (it->area.contains (p))
+                return &*it;
+        return nullptr;
+    }
+
+    void AmbikaAudioProcessorEditor::notify (const juce::String& message, bool isError)
+    {
+        toast = message;
+        toastIsError = isError;
+        toastTime = juce::Time::getMillisecondCounter();
+    }
+
+    juce::StringArray AmbikaAudioProcessorEditor::wrap (const juce::String& text, int columns)
+    {
+        juce::StringArray lines;
+        for (const auto& paragraph : juce::StringArray::fromLines (text))
+        {
+            juce::String line;
+            for (auto word : juce::StringArray::fromTokens (paragraph, " ", ""))
+            {
+                if (word.isEmpty())
+                    continue;
+                while (word.length() > columns)
+                {
+                    if (line.isNotEmpty())
+                        lines.add (line);
+                    lines.add (word.substring (0, columns));
+                    word = word.substring (columns);
+                    line = {};
+                }
+                if (line.isEmpty())
+                    line = word;
+                else if (line.length() + 1 + word.length() <= columns)
+                    line << " " << word;
+                else
+                {
+                    lines.add (line);
+                    line = word;
+                }
+            }
+            lines.add (line);
+        }
+        return lines;
+    }
+
+    //==========================================================================
+    // Header: logo, display, program window, part/page/program/zoom buttons, output
+
+    void AmbikaAudioProcessorEditor::drawHeader()
+    {
+        const int part = audioProcessor.editedPart();
+
+        // Program window.
+        juce::String line0 = "p" + juce::String (part + 1) + " " + lower (presets.presetName (part))
+                             + (presets.isModified (part) ? "*" : "");
+        juce::String line1;
+        if (toast.isNotEmpty() && juce::Time::getMillisecondCounter() - toastTime < kToastMs)
+            line1 = (toastIsError ? "! " : "") + lower (toast);
+        else
+        {
+            const auto tags = presets.presetTags (part);
+            line1 = tags.isEmpty() ? juce::String ("no tags") : lower (tags.joinIntoString (", "));
+        }
+        canvas.vfd (409, 28, line0, line1, 33);
+
+        // Parts.
+        for (int i = 0; i < kNumParts; ++i)
+            button (24 + i * 24, 80, 20, juce::String (i + 1), i == part, [this, i] { editPart (i); });
+        sectionBand (24, 104, 140, "PART");
+
+        // Pages.
+        static const char* const pageNames[] { "SYNTH", "MOD", "MULTI", "PRESETS" };
+        for (int i = 0; i < 4; ++i)
+            button (176 + i * 44, 80, 40, pageNames[i], i == page, [this, i] { showPage (i); });
+        sectionBand (176, 104, 172, "PAGE");
+
+        // Program.
+        button (360, 80, 16, "<", false, [this] { stepPreset (-1); }, false);
+        button (380, 80, 16, ">", false, [this] { stepPreset (1); }, false);
+        button (400, 80, 24, "SAVE", false, [this] { quickSave(); }, false);
+        button (428, 80, 32, "SAVE AS", false, [this] { showSaveDialog(); }, false);
+        button (464, 80, 24, "INIT", dialog == Dialog::Init, [this] { dialog = Dialog::Init; }, false);
+        sectionBand (360, 104, 128, "PROGRAM");
+
+        // Zoom.
+        for (int i = 0; i < 3; ++i)
+            button (500 + i * 24, 80, 20, juce::String (i + 1) + "X", zoomFactor == i + 1,
+                    [this, i] { setZoom (i + 1); });
+        sectionBand (500, 104, 68, "ZOOM");
+
+        // Output level.
+        canvas.band (580, 104, 36);
+        knob (598, 86, 11, 104, parameter (kOutputGainId), "OUT", "out", "output");
+    }
+
+    //==========================================================================
+    // Character display
+
+    void AmbikaAudioProcessorEditor::displayLines (juce::String& line0, juce::String& line1) const
+    {
+        const int part = audioProcessor.editedPart();
+        if (! focusVisible())
+        {
+            line0 = "part " + juce::String (part + 1) + ": " + lower (presets.presetName (part))
+                    + (presets.isModified (part) ? "*" : "");
+            if (page == 3)
+            {
+                line1 = juce::String ((int) filtered.size()) + " of " + juce::String ((int) library.size()) + " presets";
+                if (search.isNotEmpty())
+                    line1 << " matching \"" << lower (search) << "\"";
+            }
+            return;
+        }
+
+        std::vector<const Knob*> group;
+        for (const auto& k : knobs)
+            if (k.section == focus.section && group.size() < 8)
+                group.push_back (&k);
+
+        juce::String lines[2];
+        int focusLine = 0;
+        for (int i = 0; i < 8; ++i)
+        {
+            juce::String cell;
+            cell << (i % 4 == 0 ? ' ' : kDelimiter);
+            if (i < (int) group.size())
+            {
+                auto name = group[(size_t) i]->shortName.substring (0, 4);
+                if (group[(size_t) i]->param == focus.param)
+                {
+                    name = name.substring (0, 1).toUpperCase() + name.substring (1);
+                    focusLine = i / 4;
+                }
+                cell << name.paddedRight (' ', 4)
+                     << valueText (group[(size_t) i]->param).substring (0, 4).paddedLeft (' ', 4) << ' ';
+            }
+            else
+                cell = cell.paddedRight (' ', 10);
+            lines[i / 4] << cell;
+        }
+
+        if (lastEditTime != 0 && juce::Time::getMillisecondCounter() - lastEditTime < kDetailMs)
+        {
+            juce::String detail;
+            detail << ' ' << focus.longName.substring (0, 18).paddedRight (' ', 18) << kDelimiter
+                   << valueText (focus.param).substring (0, 20).paddedLeft (' ', 20);
+            lines[focusLine] = detail;
+        }
+        line0 = lines[0];
+        line1 = lines[1];
+    }
+
+    void AmbikaAudioProcessorEditor::drawDisplay()
+    {
+        juce::String line0, line1;
+        displayLines (line0, line1);
+        canvas.vfd (145, 28, line0, line1, 40);
+    }
+
+    //==========================================================================
+    // Synth page
+
+    void AmbikaAudioProcessorEditor::drawSynthPage()
+    {
+        auto row = [this] (int x, int rowIndex, const juce::String& title, const juce::String& section,
+                           std::initializer_list<KnobSpec> specs, std::function<bool (const juce::String&)> enabled = {},
+                           std::function<int (const juce::String&)> maxIndex = {})
+        {
+            const int y = kRowY[rowIndex];
+            const int w = (int) specs.size() * kPitch;
+            sectionBand (x, y, w, title);
+            canvas.band (x, y + 43, w);
+            int i = 0;
+            for (const auto& s : specs)
+            {
+                const juce::String id (s.id);
+                knob (x + 18 + i * kPitch, y + 25, 11, y + 43, partParameter (id), s.label, s.shortName, section,
+                      enabled ? enabled (id) : true, maxIndex ? maxIndex (id) : -1);
+                ++i;
+            }
+        };
+
+        for (int o = 1; o <= 2; ++o)
+        {
+            const juce::String n (o);
+            const auto id = [&] (const char* suffix) { return "osc" + n + suffix; };
+            const juce::String shape = id ("_shape"), param = id ("_parameter"), range = id ("_range"), tune = id ("_tune");
+            row (o == 1 ? 24 : 176, 0, "OSC " + n, "osc " + n,
+                 { { shape.toRawUTF8(), "SHAPE", "shap" }, { param.toRawUTF8(), "PARAM", "parm" },
+                   { range.toRawUTF8(), "RANGE", "rang" }, { tune.toRawUTF8(), "TUNE", "tune" } });
+        }
+        row (328, 0, "MIXER", "mixer",
+             { { "mix_balance", "BALANCE", "bal" }, { "mix_operator", "XMOD", "xmod" }, { "mix_amount", "AMOUNT", "amt" },
+               { "mix_sub_shape", "SUB", "sub" }, { "mix_sub_level", "SUB LVL", "slvl" }, { "mix_noise", "NOISE", "nois" },
+               { "mix_fuzz", "FUZZ", "fuzz" }, { "mix_crush", "CRUSH", "crsh" } });
+
+        const int model = engineValue ("filter_model");
+        const int variants = model > 0 ? ambika::plugin::SurgeFilter::NumSubtypes (model) : 0;
+        row (24, 1, "FILTER", "filter",
+             { { "filter_cutoff", "CUTOFF", "cut" }, { "filter_resonance", "RESO", "res" }, { "filter_mode", "MODE", "mode" },
+               { "filter_model", "MODEL", "modl" }, { "filter_variant", "VARIANT", "var" }, { "filter_env", "ENV 2", "env2" },
+               { "filter_lfo", "LFO 2", "lfo2" } },
+             [&] (const juce::String& id)
+             {
+                 if (id == "filter_mode")
+                     return model == 0;
+                 if (id == "filter_variant")
+                     return variants > 0;
+                 return true;
+             },
+             [&] (const juce::String& id) { return id == "filter_variant" ? juce::jmax (0, variants - 1) : -1; });
+
+        for (int e = 1; e <= 3; ++e)
+        {
+            const juce::String n (e);
+            juce::StringArray ids;
+            for (const char* s : { "env#_attack", "env#_decay", "env#_sustain", "env#_release", "lfo#_shape", "lfo#_rate", "lfo#_sync" })
+                ids.add (juce::String (s).replace ("#", n));
+            const int x = e == 2 ? 24 : 284;
+            const int r = e == 1 ? 1 : 2;
+            row (x, r, "ENVELOPE " + n + " + LFO " + n, "env/lfo " + n,
+                 { { ids[0].toRawUTF8(), "ATTACK", "atk" }, { ids[1].toRawUTF8(), "DECAY", "dec" },
+                   { ids[2].toRawUTF8(), "SUSTAIN", "sus" }, { ids[3].toRawUTF8(), "RELEASE", "rel" },
+                   { ids[4].toRawUTF8(), "SHAPE", "shap" }, { ids[5].toRawUTF8(), "RATE", "rate" },
+                   { ids[6].toRawUTF8(), "SYNC", "sync" } });
+        }
+        row (544, 1, "VOICE LFO", "voice lfo", { { "voice_lfo_shape", "SHAPE", "shap" }, { "voice_lfo_rate", "RATE", "rate" } });
+
+        // Maker's print.
+        canvas.text3c ("6 PART", 580, kRowY[2] + 14, MID);
+        canvas.text3c ("HYBRID", 580, kRowY[2] + 22, MID);
+        canvas.text3c ("POLYSYNTH", 580, kRowY[2] + 30, MID);
+        canvas.fill (548, kRowY[2] + 40, 64, 1, D3);
+
+        row (24, 3, "PART", "part",
+             { { "part_polyphony", "VOICING", "voic" }, { "part_legato", "LEGATO", "lega" }, { "part_volume", "VOLUME", "vol" },
+               { "part_pan", "PAN", "pan" }, { "part_portamento", "GLIDE", "glid" }, { "part_octave", "OCTAVE", "oct" },
+               { "part_tuning", "TUNE", "tune" }, { "part_spread", "SPREAD", "sprd" } });
+
+        // Scope: the waveform, curve or response of the section being edited.
+        juce::String caption;
+        canvas.well (320, 336, 296, 41);
+        drawScope (324, 340, 288, 33, caption);
+        sectionBand (320, kRowY[3], 296, "SCOPE", caption);
+    }
+
+    void AmbikaAudioProcessorEditor::drawScope (int x, int y, int w, int h, juce::String& caption)
+    {
+        canvas.fill (x - 2, y - 2, w + 4, h + 4, BLK);
+        canvas.fill (x, y, w, h, VOFF);
+        std::vector<double> level ((size_t) w, -1.0);
+
+        const auto id = focus.param != nullptr ? engineIdOf (focus.param->paramID) : juce::String();
+        const auto& section = focus.section;
+        constexpr int n = 280;
+        uint8_t buffer[n];
+
+        auto plotBuffer = [&]
+        {
+            for (int i = 0; i < w; ++i)
+                level[(size_t) i] = buffer[i * n / w] / 255.0;
+        };
+        auto oscillator = [&] (int o, uint8_t* out)
+        {
+            const juce::String p = "osc" + juce::String (o);
+            ambika::plugin::RenderOscillatorPreview ((uint8_t) engineValue (p + "_shape"), (uint8_t) engineValue (p + "_parameter"),
+                                                     (int8_t) engineValue (p + "_range"), out, n);
+        };
+
+        if (section == "osc 1" || section == "osc 2")
+        {
+            oscillator (section.getTrailingIntValue(), buffer);
+            plotBuffer();
+            caption = "OSC " + juce::String (section.getTrailingIntValue());
+        }
+        else if (section == "filter")
+        {
+            const int cutoff = engineValue ("filter_cutoff"), resonance = engineValue ("filter_resonance");
+            const int mode = engineValue ("filter_mode"), model = engineValue ("filter_model");
+            const int variant = engineValue ("filter_variant");
+            constexpr double minHz = 20.0, maxHz = 20000.0;
+            constexpr int points = 120;
+            if (model > 0)
+            {
+                const std::array<int, 5> key { cutoff, resonance, mode, model, variant };
+                if (key != surgeKey)
+                {
+                    surgeKey = key;
+                    std::vector<double> frequencies (points);
+                    for (int i = 0; i < points; ++i)
+                        frequencies[(size_t) i] = minHz * std::pow (maxHz / minHz, (double) i / (points - 1));
+                    surgeCurve.assign (points, 0.0);
+                    const double cv = juce::jlimit (0.0, 255.0, cutoff * 2.0 - 8.0);
+                    ambika::plugin::SurgeFilter::MeasureResponse (
+                        model, variant, ambika::plugin::AnalogVoice::CutoffToHz (cv), (float) (resonance * 4.0 / 255.0),
+                        ambika::plugin::Engine::kNativeSampleRate * ambika::plugin::Engine::kOversampling,
+                        frequencies.data(), surgeCurve.data(), points);
+                }
+            }
+            for (int i = 0; i < w; ++i)
+            {
+                const double t = (double) i / (w - 1);
+                double magnitude;
+                if (model > 0)
+                {
+                    const double position = t * (points - 1);
+                    const int index = juce::jlimit (0, points - 2, (int) position);
+                    const double frac = position - index;
+                    magnitude = surgeCurve[(size_t) index] * (1.0 - frac) + surgeCurve[(size_t) index + 1] * frac;
+                }
+                else
+                    magnitude = ambika::plugin::FilterResponse ((uint8_t) cutoff, (uint8_t) resonance, (uint8_t) mode,
+                                                                minHz * std::pow (maxHz / minHz, t));
+                const double db = juce::Decibels::gainToDecibels (magnitude, -100.0);
+                level[(size_t) i] = juce::jlimit (0.0, 1.0, (db + 36.0) / 54.0);
+            }
+            caption = "FILTER 20HZ-20KHZ";
+        }
+        else if (section.startsWith ("env/lfo") && id.startsWith ("lfo"))
+        {
+            const juce::String e (section.getTrailingIntValue());
+            ambika::plugin::RenderLfoPreview ((uint8_t) engineValue ("lfo" + e + "_shape"), buffer, n);
+            plotBuffer();
+            caption = "LFO " + e;
+        }
+        else if (section.startsWith ("env/lfo"))
+        {
+            const juce::String e (section.getTrailingIntValue());
+            const double wa = std::sqrt (ambika::plugin::EnvelopeSegmentSeconds ((uint8_t) engineValue ("env" + e + "_attack")));
+            const double wd = std::sqrt (ambika::plugin::EnvelopeSegmentSeconds ((uint8_t) engineValue ("env" + e + "_decay")));
+            const double wr = std::sqrt (ambika::plugin::EnvelopeSegmentSeconds ((uint8_t) engineValue ("env" + e + "_release")));
+            const double sustain = engineValue ("env" + e + "_sustain") / 127.0;
+            const double hold = w * 0.18;
+            const double scale = (w - hold) / juce::jmax (wa + wd + wr, 2.4);
+            const double xa = wa * scale, xd = xa + wd * scale, xs = xd + hold, xr = xs + wr * scale;
+            for (int i = 0; i < w; ++i)
+            {
+                const double px = i;
+                double v = 0.0;
+                if (px < xa)
+                    v = shaped (px / juce::jmax (1.0, xa));
+                else if (px < xd)
+                    v = 1.0 + (sustain - 1.0) * shaped ((px - xa) / juce::jmax (1.0, xd - xa));
+                else if (px < xs)
+                    v = sustain;
+                else if (px < xr)
+                    v = sustain * (1.0 - shaped ((px - xs) / juce::jmax (1.0, xr - xs)));
+                level[(size_t) i] = v;
+            }
+            caption = "ENVELOPE " + e;
+        }
+        else if (section == "voice lfo")
+        {
+            ambika::plugin::RenderLfoPreview ((uint8_t) engineValue ("voice_lfo_shape"), buffer, n);
+            plotBuffer();
+            caption = "VOICE LFO";
+        }
+        else
+        {
+            uint8_t second[n];
+            oscillator (1, buffer);
+            oscillator (2, second);
+            const int balance = engineValue ("mix_balance");
+            for (int i = 0; i < n; ++i)
+                buffer[i] = (uint8_t) ((buffer[i] * (63 - balance) + second[i] * balance) / 63);
+            plotBuffer();
+            caption = "OSC 1 + OSC 2";
+        }
+
+        // Curve, then a halo around it.
+        auto yOf = [&] (double v) { return y + h - 2 - juce::roundToInt (juce::jlimit (0.0, 1.0, v) * (h - 3)); };
+        for (int i = 0; i < w; ++i)
+        {
+            if (level[(size_t) i] < 0.0)
+                continue;
+            const int y1 = yOf (level[(size_t) i]);
+            const int y0 = i > 0 && level[(size_t) i - 1] >= 0.0 ? yOf (level[(size_t) i - 1]) : y1;
+            for (int yy = juce::jmin (y0, y1); yy <= juce::jmax (y0, y1); ++yy)
+                canvas.put (x + i, yy, VON);
+        }
+        std::vector<juce::Point<int>> halo;
+        for (int yy = y; yy < y + h; ++yy)
+            for (int xx = x; xx < x + w; ++xx)
+                if (canvas.at (xx, yy) == VOFF
+                    && ((xx > x && canvas.at (xx - 1, yy) == VON) || (xx < x + w - 1 && canvas.at (xx + 1, yy) == VON)
+                        || (yy > y && canvas.at (xx, yy - 1) == VON) || (yy < y + h - 1 && canvas.at (xx, yy + 1) == VON)))
+                    halo.push_back ({ xx, yy });
+        for (auto p : halo)
+            canvas.put (p.x, p.y, VHALO);
+    }
+
+    //==========================================================================
+    // Modulation page
+
+    void AmbikaAudioProcessorEditor::drawModPage()
+    {
+        const int first = matrixPage * 8;
+        sectionBand (24, 120, 592, "MODULATION MATRIX",
+                     "SLOTS " + juce::String (first + 1) + "-" + juce::String (first + 8) + " OF 16");
+        canvas.well (24, 132, 592, 112);
+        canvas.fill (28, 136, 584, 104, BLK);
+
+        for (int i = 0; i < 8; ++i)
+        {
+            const int slot = first + i;
+            const juce::String n (slot + 1);
+            const int y = 143 + i * 12;
+            const bool selected = slot == selectedSlot;
+            auto* source = partParameter ("mod" + n + "_source");
+            auto* destination = partParameter ("mod" + n + "_destination");
+            auto* amount = partParameter ("mod" + n + "_amount");
+            if (source == nullptr || destination == nullptr || amount == nullptr)
+                continue;
+            const int ink = selected ? BLK : VON;
+            if (selected)
+                canvas.fill (31, y - 2, 578, 11, VON);
+            canvas.text5 (n.paddedLeft ('0', 2), 34, y, ink);
+            canvas.text5 (valueText (source).toUpperCase().substring (0, 14), 52, y, ink);
+            canvas.text5 (valueText (destination).toUpperCase().substring (0, 14), 140, y, ink);
+            canvas.text5 (valueText (amount).toUpperCase(), 230, y, ink);
+
+            // Amount bar: 16 segments each way from the centre.
+            const int value = juce::roundToInt (amount->convertFrom0to1 (amount->getValue()));
+            const int lit = juce::roundToInt (std::abs (value) / 63.0 * 16.0);
+            canvas.fill (401, y - 1, 2, 9, ink);
+            for (int s = 0; s < 16; ++s)
+            {
+                const bool right = s < lit && value > 0, left = s < lit && value < 0;
+                const int off = selected ? VHALO : VOFF;
+                canvas.fill (404 + s * 6, y, 5, 7, right ? ink : off);
+                canvas.fill (395 - s * 6, y, 5, 7, left ? ink : off);
+            }
+            if (slot == 13)
+                canvas.text5 ("X MOD WHEEL", 506, y, ink);
+
+            // Click selects the slot; dragging the row sets its amount.
+            Knob k;
+            k.param = amount;
+            k.shortName = "amt";
+            k.longName = "mod " + n + " amount";
+            knobs.push_back (k);
+            Hit h;
+            h.area = { 29, y - 2, 582, 12 };
+            h.knob = (int) knobs.size() - 1;
+            h.onClick = [this, slot, amount]
+            {
+                selectedSlot = slot;
+                focus.param = amount;
+                focus.section = "slot " + juce::String (slot + 1);
+                focus.shortName = "amt";
+                focus.longName = "mod " + juce::String (slot + 1) + " amount";
+            };
+            hits.push_back (std::move (h));
+        }
+
+        // Matrix page buttons.
+        sectionBand (24, 252, 72, "PAGE");
+        button (24, 276, 32, "1-8", matrixPage == 0, [this] { showMatrixPage (0); });
+        button (64, 276, 32, "9-16", matrixPage == 1, [this] { showMatrixPage (1); });
+
+        // Selected slot.
+        const juce::String n (selectedSlot + 1);
+        const juce::String slotSection = "slot " + n;
+        sectionBand (104, 252, 108, "SLOT " + n.paddedLeft ('0', 2));
+        canvas.band (104, 295, 108);
+        knob (122, 277, 11, 295, partParameter ("mod" + n + "_source"), "SOURCE", "src", slotSection);
+        knob (158, 277, 11, 295, partParameter ("mod" + n + "_destination"), "DEST", "dst", slotSection);
+        knob (194, 277, 11, 295, partParameter ("mod" + n + "_amount"), "AMOUNT", "amt", slotSection);
+
+        // Notes.
+        sectionBand (220, 252, 396, "NOTES");
+        canvas.well (220, 262, 396, 32);
+        canvas.fill (222, 264, 392, 28, BLK);
+        juce::String note0, note1;
+        if (focus.section.startsWith ("modifier"))
+        {
+            const juce::String m (focus.section.getTrailingIntValue());
+            note0 = "modifier " + m + ": " + valueText (partParameter ("modifier" + m + "_operator")) + " of "
+                    + valueText (partParameter ("modifier" + m + "_in1")) + " and "
+                    + valueText (partParameter ("modifier" + m + "_in2"));
+            note1 = "its output is a modulation source for the matrix.";
+        }
+        else
+        {
+            note0 = "slot " + n + ": " + valueText (partParameter ("mod" + n + "_source")) + " " + juce::String::charToString (kArrow)
+                    + " " + valueText (partParameter ("mod" + n + "_destination")) + ", "
+                    + valueText (partParameter ("mod" + n + "_amount"));
+            note1 = selectedSlot == 13 ? "slot 14 is scaled by the mod wheel, as on the hardware."
+                                       : "click a row to pick its slot; drag a row to set its amount.";
+        }
+        canvas.vfd (225, 270, note0, note1, 64);
+
+        // Modifiers.
+        for (int m = 0; m < 4; ++m)
+        {
+            const int x = 24 + m * 116;
+            const juce::String k (m + 1);
+            const juce::String section = "modifier " + k;
+            sectionBand (x, 320, 108, "MODIFIER " + k);
+            canvas.band (x, 363, 108);
+            knob (x + 18, 345, 11, 363, partParameter ("modifier" + k + "_in1"), "IN 1", "in1", section);
+            knob (x + 54, 345, 11, 363, partParameter ("modifier" + k + "_operator"), "OP", "op", section);
+            knob (x + 90, 345, 11, 363, partParameter ("modifier" + k + "_in2"), "IN 2", "in2", section);
+        }
+        canvas.text3c ("6 PART", 552, 334, MID);
+        canvas.text3c ("HYBRID", 552, 342, MID);
+        canvas.text3c ("POLYSYNTH", 552, 350, MID);
+        canvas.fill (504, 360, 96, 1, D3);
+    }
+
+    //==========================================================================
+    // Multi page
+
+    void AmbikaAudioProcessorEditor::drawMultiPage()
+    {
+        const int edited = audioProcessor.editedPart();
+
+        // Voice cards.
+        for (int v = 0; v < kNumVoices; ++v)
+        {
+            const int x = 24 + v * 100;
+            const int owner = rawInt (voicePartId (v)) - 1;  // -1 = off
+            sectionBand (x, 120, 92, "VOICE " + juce::String (v + 1));
+            canvas.well (x, 132, 92, 20);
+            canvas.fill (x + 2, 134, 88, 16, BLK);
+            const juce::String text = owner < 0 ? juce::String ("off")
+                                                : juce::String (owner + 1) + " " + lower (presets.presetName (owner));
+            canvas.vfd (x + 7, 138, juce::StringArray { text }, 13);
+            canvas.band (x, 196, 92);
+            knob (x + 20, 176, 11, 196, parameter (voicePartId (v)), "PART", "v" + juce::String (v + 1), "voices");
+            canvas.button (x + 44, 170, 40, "EDIT", owner >= 0 && owner == edited, true);
+            canvas.led (x + 62, 162, audioProcessor.voiceLevel (v) > 8);
+            addHit ({ x + 43, 169, 42, 18 }, [this, owner]
+            {
+                if (owner >= 0)
+                {
+                    editPart (owner);
+                    showPage (0);
+                }
+            });
+        }
+
+        // Allocation.
+        const int mode = rawInt (kVoiceModeId);
+        const int unison = rawInt (kUnisonId);
+        sectionBand (24, 216, 184, "VOICE ALLOCATION");
+        canvas.band (24, 259, 72);
+        knob (42, 241, 11, 259, parameter (kVoiceModeId), "MODE", "mode", "allocation");
+        knob (78, 241, 11, 259, parameter (kUnisonId), "UNISON", "uni", "allocation", mode != 0);
+        canvas.well (100, 226, 108, 24);
+        canvas.fill (102, 228, 104, 20, BLK);
+        canvas.vfd (106, 230, "mode " + valueText (parameter (kVoiceModeId)),
+                    "unison " + (mode == 0 ? juce::String ("-") : juce::String (unison)), 16);
+
+        juce::String description;
+        if (mode == 0)
+            description = "Every part plays every note on its own cards, using its Voicing (poly, mono, 2x unison, cyclic) "
+                          "from the Synth page. Parts that own cards layer. Unison applies to Cyclic and Poly.";
+        else
+        {
+            description = mode == 1 ? "Notes step through the voice cards in order, 1, 2, 3 ... 6, whatever part each card "
+                                      "plays, so successive notes can cycle through different patches."
+                                    : "Each note takes the free card that has rested longest; when all are busy the "
+                                      "oldest note is stolen.";
+            description << (unison > 1 ? " Unison " + juce::String (unison) + ": each note plays " + juce::String (unison)
+                                             + " cards at once (detuned by each part's Spread)."
+                                       : juce::String (" Raise Unison to play 2-6 cards per note."));
+        }
+        canvas.well (24, 272, 184, 100);
+        canvas.fill (26, 274, 180, 96, BLK);
+        auto lines = wrap (lower (description), 29);
+        lines.removeRange (10, lines.size());
+        canvas.vfd (29, 277, lines, 29);
+
+        // Key ranges.
+        sectionBand (216, 216, 400, "KEY RANGES");
+        canvas.well (216, 228, 400, 64);
+        canvas.fill (218, 230, 396, 60, BLK);
+        for (int p = 0; p < kNumParts; ++p)
+        {
+            const int y = 236 + p * 9;
+            const int low = rawInt (partKeyLowId (p)), high = rawInt (partKeyHighId (p));
+            const int ink = p == edited ? VON : VHALO;
+            canvas.text5 ("p" + juce::String (p + 1) + " " + lower (noteName (low)).paddedRight (' ', 3) + " "
+                              + lower (noteName (high)),
+                          224, y, ink);
+            for (int note = 0; note < 128; ++note)
+            {
+                const int pc = note % 12;
+                const bool black = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
+                const bool in = note >= low && note <= high;
+                canvas.fill (290 + note * 2, y, 2, 7, in ? (black ? VHALO : VON) : (pc == 0 ? VHALO : VOFF));
+            }
+            canvas.text5 (lower (presets.presetName (p)).substring (0, 10), 552, y, ink);
+        }
+        for (int p = 0; p < kNumParts; ++p)
+        {
+            const int x = 216 + p * 66;
+            const juce::String n (p + 1);
+            const juce::String section = p < 4 ? "keys 1-4" : "keys 5-6";
+            sectionBand (x, 300, 62, "PART " + n);
+            canvas.band (x, 343, 62);
+            knob (x + 16, 325, 11, 343, parameter (partKeyLowId (p)), "LOW", n + "lo", section);
+            knob (x + 48, 325, 11, 343, parameter (partKeyHighId (p)), "HIGH", n + "hi", section);
+        }
+    }
+
+    //==========================================================================
+    // Presets page
+
+    juce::StringArray AmbikaAudioProcessorEditor::libraryTags() const
+    {
+        auto tags = PresetManager::standardTags();
+        for (const auto& info : library)
+            for (const auto& t : info.tags)
+                if (! tags.contains (t, true))
+                    tags.add (t);
+        return tags;
+    }
+
+    void AmbikaAudioProcessorEditor::drawPresetsPage()
+    {
+        // Search.
+        sectionBand (24, 120, 376, "SEARCH", "TYPE TO SEARCH");
+        canvas.well (24, 132, 376, 20);
+        canvas.fill (26, 134, 372, 16, BLK);
+        canvas.vfd (29, 138, juce::StringArray { lower (search) + "_" }, 61);
+        addHit ({ 24, 132, 376, 20 }, [this] { search.clear(); applyFilter(); });
+
+        // Library.
+        sectionBand (24, 160, 376, "LIBRARY", juce::String ((int) filtered.size()) + " PRESETS");
+        canvas.well (24, 172, 376, 172);
+        canvas.fill (26, 174, 372, 168, BLK);
+        const int rows = (int) filtered.size();
+        scrollRow = juce::jlimit (0, juce::jmax (0, rows - kLibraryRows), scrollRow);
+        for (int i = 0; i < kLibraryRows; ++i)
+        {
+            const int row = scrollRow + i;
+            const int y = 177 + i * 9;
+            if (row >= rows)
+                break;
+            const auto& info = filtered[(size_t) row];
+            const bool selected = row == selectedRow;
+            if (selected)
+                canvas.fill (27, y - 1, 366, 9, VON);
+            const int ink = selected ? BLK : VON;
+            canvas.text5 (lower (info.name).substring (0, 30), 30, y, ink);
+            canvas.text5 (lower (info.tags.joinIntoString (",")).substring (0, 29), 214, y, selected ? BLK : VHALO);
+            Hit h;
+            h.area = { 26, y - 1, 368, 9 };
+            h.onClick = [this, row] { selectRow (row); };
+            h.onDoubleClick = [this, row] { selectRow (row); loadSelected(); };
+            h.onWheel = [this] (int d) { scrollRow -= d * 3; };
+            hits.push_back (std::move (h));
+        }
+        if (rows > kLibraryRows)
+        {
+            const int track = 166;
+            const int barH = juce::jmax (6, track * kLibraryRows / rows);
+            const int barY = 175 + (track - barH) * scrollRow / juce::jmax (1, rows - kLibraryRows);
+            canvas.fill (395, 175, 2, track, D1);
+            canvas.fill (395, barY, 2, barH, MID);
+        }
+        {
+            Hit h;  // wheel anywhere on the list
+            h.area = { 24, 172, 376, 172 };
+            h.onWheel = [this] (int d) { scrollRow -= d * 3; };
+            hits.insert (hits.end() - juce::jmin ((int) hits.size(), juce::jmin (kLibraryRows, juce::jmax (0, rows - scrollRow))), h);
+        }
+
+        // Tags.
+        sectionBand (408, 120, 208, "TAGS");
+        const auto tags = libraryTags();
+        for (int i = 0; i < juce::jmin (16, tags.size()); ++i)
+        {
+            const auto tag = tags[i];
+            const bool on = activeTags.contains (tag, true);
+            button (408 + (i % 4) * 52, 136 + (i / 4) * 20, 48, tag.substring (0, 12), on, [this, tag]
+            {
+                if (activeTags.contains (tag, true))
+                    activeTags.removeString (tag, true);
+                else
+                    activeTags.add (tag);
+                applyFilter();
+            }, false);
+        }
+
+        // Details of the selected preset.
+        sectionBand (408, 220, 208, "DETAILS");
+        canvas.well (408, 232, 208, 112);
+        canvas.fill (410, 234, 204, 108, BLK);
+        juce::StringArray lines;
+        if (const auto* info = selectedPreset())
+        {
+            lines.add (lower (info->name));
+            lines.addArray (wrap ("tags: " + (info->tags.isEmpty() ? juce::String ("-") : lower (info->tags.joinIntoString (", "))), 33));
+            lines.add ("by: " + (info->author.isEmpty() ? juce::String ("-") : lower (info->author)));
+            lines.add (info->factory ? juce::String ("factory program, read only")
+                                     : "saved " + info->modified.formatted ("%Y-%m-%d %H:%M"));
+            lines.add ({});
+            lines.addArray (wrap (lower (info->comment), 33));
+        }
+        else
+        {
+            lines.addArray (wrap ("no preset selected.", 33));
+            lines.add ({});
+            lines.addArray (wrap ("click a preset to select it; double-click or enter loads it into part "
+                                      + juce::String (audioProcessor.editedPart() + 1) + ".",
+                                  33));
+            lines.add ({});
+            lines.addArray (wrap ("type to search. tags narrow the list to presets that have them all.", 33));
+        }
+        lines.removeRange (11, lines.size());
+        canvas.vfd (413, 237, lines, 33);
+
+        // Actions.
+        sectionBand (24, 352, 376, "PRESET");
+        const auto* selected = selectedPreset();
+        button (24, 368, 40, "LOAD", false, [this] { loadSelected(); }, false);
+        button (72, 368, 40, "RENAME", false, [this] { openRename(); }, false);
+        button (120, 368, 40, deleteArmed ? "SURE?" : "DELETE", deleteArmed, [this] { deleteSelected(); }, false);
+        button (168, 368, 40, "FOLDER", false, [this]
+        {
+            auto dir = presets.getDirectory();
+            dir.createDirectory();
+            dir.revealToUser();
+        }, false);
+        button (216, 368, 40, "RESCAN", false, [this]
+        {
+            refreshLibrary();
+            notify ("Library rescanned: " + juce::String ((int) library.size()) + " presets");
+        }, false);
+        if (selected != nullptr && selected->factory)
+            canvas.text3 ("FACTORY: READ ONLY", 264, 374, MID);
+
+        // Ambika files.
+        sectionBand (408, 352, 208, "IMPORT AMBIKA FILES");
+        button (408, 368, 96, "TO PART", false, [this] { loadAmbikaFile(); }, false);
+        button (512, 368, 96, "TO LIBRARY", false, [this] { importToLibrary(); }, false);
+    }
+
+    //==========================================================================
+    // Save / rename dialog and the INIT popup
+
+    void AmbikaAudioProcessorEditor::textField (int x, int y, int w, const juce::String& label, int field)
+    {
+        const bool focused = focusedField == field;
+        if (focused)
+        {
+            canvas.fill (x - 82, y + 5, Canvas::width3 (label) + 6, 9, LT);
+            canvas.text3 (label, x - 79, y + 7, D1);
+        }
+        else
+            canvas.text3 (label, x - 79, y + 7, LT);
+        canvas.well (x, y, w, 20);
+        canvas.fill (x + 2, y + 2, w - 4, 16, BLK);
+        const int columns = (w - 12) / 6;
+        auto text = fieldText[field] + (focused ? "_" : "");
+        if (text.length() > columns)
+            text = text.substring (text.length() - columns);
+        canvas.text5 (text, x + 6, y + 6, VON);
+        addHit ({ x - 82, y, w + 82, 20 }, [this, field] { focusedField = field; });
+    }
+
+    bool AmbikaAudioProcessorEditor::dialogClash() const
+    {
+        const auto name = fieldText[0].trim();
+        if (name.isEmpty())
+            return false;
+        const auto file = presets.fileForName (name);
+        if (dialog == Dialog::Rename)
+            return file.existsAsFile() && file != renaming;
+        return file.existsAsFile();
+    }
+
+    void AmbikaAudioProcessorEditor::drawDialog()
+    {
+        addHit ({ 0, 0, canvasWidth, canvasHeight }, [] {});  // modal
+        const bool rename = dialog == Dialog::Rename;
+        canvas.fill (71, 127, 498, 234, BLK);
+        canvas.well (72, 128, 496, 232);
+        canvas.band (72, 128, 496);
+        canvas.text3 (rename ? juce::String ("RENAME PRESET")
+                             : "SAVE PART " + juce::String (audioProcessor.editedPart() + 1) + " AS PRESET",
+                      76, 130, WH);
+
+        textField (160, 148, 392, "NAME", 0);
+        if (! rename)
+        {
+            canvas.text3 ("TAGS", 81, 182, LT);
+            const auto& standard = PresetManager::standardTags();
+            for (int i = 0; i < standard.size(); ++i)
+            {
+                const auto tag = standard[i];
+                button (160 + (i % 7) * 56, 176 + (i / 7) * 20, 52, tag, dialogTags.contains (tag, true), [this, tag]
+                {
+                    if (dialogTags.contains (tag, true))
+                        dialogTags.removeString (tag, true);
+                    else
+                        dialogTags.add (tag);
+                }, false);
+            }
+            textField (160, 220, 392, "EXTRA TAGS", 1);
+            textField (160, 244, 392, "AUTHOR", 2);
+            textField (160, 268, 392, "COMMENT", 3);
+        }
+
+        juce::String warning = dialogError;
+        if (warning.isEmpty() && dialogClash())
+            warning = rename ? "Another preset already has this name." : "A preset with this name exists. Saving will replace it.";
+        if (warning.isNotEmpty())
+            canvas.text3 (warning.substring (0, 98), 160, 300, LED_ON);
+        if (! rename)
+            canvas.text3 ("TAB: NEXT FIELD   ENTER: SAVE   ESC: CANCEL", 80, 326, MID);
+
+        button (400, 320, 72, "CANCEL", false, [this] { closeDialog(); }, false);
+        const bool canConfirm = fieldText[0].trim().isNotEmpty() && ! (rename && dialogClash());
+        const juce::String confirm = rename ? "RENAME" : (dialogClash() ? "REPLACE" : "SAVE");
+        canvas.button (480, 320, 72, confirm, false, false);
+        if (canConfirm)
+            addHit ({ 479, 319, 74, 18 }, [this] { confirmDialog(); });
+        else
+            canvas.text3c (confirm, 516, 325, D3);
+    }
+
+    void AmbikaAudioProcessorEditor::drawInitPopup()
+    {
+        addHit ({ 0, 0, canvasWidth, canvasHeight }, [this] { dialog = Dialog::None; });
+        canvas.fill (399, 99, 162, 50, BLK);
+        canvas.well (400, 100, 160, 48);
+        const int part = audioProcessor.editedPart();
+        button (408, 108, 144, "INIT PART " + juce::String (part + 1), false, [this, part]
+        {
+            dialog = Dialog::None;
+            presets.initialise (part);
+            notify ("Part " + juce::String (part + 1) + " initialised");
+        }, false);
+        button (408, 128, 144, "INIT ALL PARTS", false, [this]
+        {
+            dialog = Dialog::None;
+            presets.initialiseAll();
+            notify ("Everything initialised: all parts and the voice routing");
+        }, false);
+    }
+
+    //==========================================================================
+    // Navigation
 
     void AmbikaAudioProcessorEditor::showPage (int index)
     {
-        content->showPage (index);
+        page = juce::jlimit (0, 3, index);
+        deleteArmed = false;
+        if (page == 3)
+            refreshLibrary();
+        refresh();
+    }
+
+    void AmbikaAudioProcessorEditor::showMatrixPage (int newPage)
+    {
+        matrixPage = juce::jlimit (0, 1, newPage);
+        if (selectedSlot / 8 != matrixPage)
+        {
+            selectedSlot = matrixPage * 8;
+            focus = {};
+        }
+        refresh();
     }
 
     void AmbikaAudioProcessorEditor::editPart (int part)
     {
         audioProcessor.setEditedPart (part);
-        lookAndFeel.setAccent (Palette::part (part));
-        content->setEditedPart (part);
-        content->sendLookAndFeelChange();
-        content->repaint();
+        // Keep the same control in focus on the new part.
+        if (focus.param != nullptr)
+        {
+            const auto engineId = engineIdOf (focus.param->paramID);
+            if (findParameterInfo (engineId) != nullptr)
+                focus.param = partParameter (engineId);
+        }
+        surgeKey = { -1, -1, -1, -1, -1 };
+        refresh();
     }
 
-    void AmbikaAudioProcessorEditor::buildContent (int page)
+    void AmbikaAudioProcessorEditor::setZoom (int newZoom)
     {
-        if (content != nullptr)
-            removeChildComponent (content.get());
-        content = std::make_unique<Content> (
-            audioProcessor, [this] (int index) { showPage (index); }, [this] (int part) { editPart (part); },
-            [this]
-            {
-                // Rebuild after the click has finished (the button lives in content).
-                juce::Component::SafePointer<AmbikaAudioProcessorEditor> safe (this);
-                juce::MessageManager::callAsync ([safe] { if (safe != nullptr) safe->toggleTheme(); });
-            },
-            [this] (juce::Component& button) { showHighlightEditor (button); });
-        content->setSize (designWidth, designHeight);
-        addAndMakeVisible (*content);
-        editPart (audioProcessor.editedPart());
-        showPage (page);
-        resized();
-    }
-
-    void AmbikaAudioProcessorEditor::toggleTheme()
-    {
-        const auto theme = Palette::theme() == Palette::Theme::Dark ? Palette::Theme::Light : Palette::Theme::Dark;
-        Palette::setTheme (theme);
-        saveThemePreference (theme);
-        lookAndFeel.applyTheme();
-        // Controls take their colours when they are built, so build them again.
-        buildContent (content->page());
-    }
-
-    void AmbikaAudioProcessorEditor::showHighlightEditor (juce::Component& button)
-    {
-        if (highlightBox != nullptr)
-            return;
-        auto editor = std::make_unique<HighlightEditor> (audioProcessor.editedPart(), [this] { highlightsChanged(); });
-        // A child of this window (so it inherits the look and closes with it).
-        highlightBox = &juce::CallOutBox::launchAsynchronously (
-            std::move (editor), getLocalArea (&button, button.getLocalBounds()), this);
-    }
-
-    void AmbikaAudioProcessorEditor::highlightsChanged()
-    {
-        content->refreshPartColours();
-        editPart (audioProcessor.editedPart());
+        zoomFactor = juce::jlimit (1, 3, newZoom);
+        audioProcessor.setEditorZoom (zoomFactor);
+        setSize (canvasWidth * zoomFactor, canvasHeight * zoomFactor);
+        render();
+        shownPixels = canvas.pixels();
+        canvas.toImage (image, zoomFactor);
         repaint();
+    }
+
+    void AmbikaAudioProcessorEditor::selectSlot (int slot)
+    {
+        selectedSlot = juce::jlimit (0, 15, slot);
+        matrixPage = selectedSlot / 8;
+        page = 1;
+        focusParameter ("mod" + juce::String (selectedSlot + 1) + "_amount");
+    }
+
+    void AmbikaAudioProcessorEditor::focusParameter (const juce::String& id, bool asEdit)
+    {
+        renderOnce();
+        auto* p = findParameterInfo (id) != nullptr ? partParameter (id) : parameter (id);
+        for (const auto& k : knobs)
+            if (k.param == p && k.section.isNotEmpty())
+            {
+                focus = k;
+                break;
+            }
+        if (asEdit)
+            edited();
+        render();
+    }
+
+    //==========================================================================
+    // Mouse and keys
+
+    void AmbikaAudioProcessorEditor::mouseDown (const juce::MouseEvent& e)
+    {
+        grabKeyboardFocus();
+        armedAtClick = deleteArmed;
+        deleteArmed = false;
+        const auto* hit = hitAt (toCanvas (e.getPosition()));
+        if (hit == nullptr)
+        {
+            refresh();
+            return;
+        }
+        const Hit h = *hit;
+        if (h.knob >= 0)
+        {
+            const Knob k = knobs[(size_t) h.knob];
+            if (k.section.isNotEmpty())
+                focus = k;
+            if (k.enabled)
+            {
+                dragKnob = k;
+                dragParam = k.param;
+                dragStartIndex = indexOf (k);
+                dragStartY = e.y;
+                dragParam->beginChangeGesture();
+            }
+        }
+        if (h.onClick)
+            h.onClick();
+        refresh();
+    }
+
+    void AmbikaAudioProcessorEditor::mouseDrag (const juce::MouseEvent& e)
+    {
+        if (dragParam == nullptr)
+            return;
+        double pixelsPerStep = juce::jlimit (1.5, 12.0, 200.0 / stepCount (dragKnob));
+        if (e.mods.isShiftDown())
+            pixelsPerStep *= 4.0;
+        const int index = dragStartIndex + (int) std::floor ((dragStartY - e.y) / pixelsPerStep + 0.5);
+        if (juce::jlimit (0, stepCount (dragKnob) - 1, index) != indexOf (dragKnob))
+        {
+            setIndex (dragKnob, index);
+            edited();
+        }
+        refresh();
+    }
+
+    void AmbikaAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
+    {
+        if (dragParam != nullptr)
+        {
+            dragParam->endChangeGesture();
+            dragParam = nullptr;
+        }
+    }
+
+    void AmbikaAudioProcessorEditor::mouseDoubleClick (const juce::MouseEvent& e)
+    {
+        const auto* hit = hitAt (toCanvas (e.getPosition()));
+        if (hit == nullptr)
+            return;
+        const Hit h = *hit;
+        if (h.knob >= 0)
+        {
+            const Knob k = knobs[(size_t) h.knob];
+            if (! k.enabled)
+                return;
+            const bool open = dragParam == k.param;
+            if (! open)
+                k.param->beginChangeGesture();
+            k.param->setValueNotifyingHost (k.param->getDefaultValue());
+            if (! open)
+                k.param->endChangeGesture();
+            edited();
+        }
+        else if (h.onDoubleClick)
+            h.onDoubleClick();
+        refresh();
+    }
+
+    void AmbikaAudioProcessorEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+    {
+        const float delta = std::abs (wheel.deltaY) > 0.0f ? wheel.deltaY : wheel.deltaX;
+        if (delta == 0.0f)
+            return;
+        const int direction = (delta > 0.0f) != wheel.isReversed ? 1 : -1;
+        const auto* hit = hitAt (toCanvas (e.getPosition()));
+        if (hit == nullptr)
+            return;
+        const Hit h = *hit;
+        if (h.knob >= 0)
+        {
+            const Knob k = knobs[(size_t) h.knob];
+            if (k.section.isNotEmpty())
+                focus = k;
+            if (k.enabled)
+            {
+                k.param->beginChangeGesture();
+                setIndex (k, indexOf (k) + direction);
+                k.param->endChangeGesture();
+                edited();
+            }
+        }
+        else if (h.onWheel)
+            h.onWheel (direction);
+        refresh();
+    }
+
+    bool AmbikaAudioProcessorEditor::editText (juce::String& text, const juce::KeyPress& key, int maxLength)
+    {
+        if (key.getKeyCode() == juce::KeyPress::backspaceKey)
+        {
+            text = text.dropLastCharacters (1);
+            return true;
+        }
+        if (key.getModifiers().isCommandDown() && key.getKeyCode() == 'V')
+        {
+            text = (text + juce::SystemClipboard::getTextFromClipboard().upToFirstOccurrenceOf ("\n", false, false))
+                       .substring (0, maxLength);
+            return true;
+        }
+        const auto c = key.getTextCharacter();
+        if (c >= 32 && c < 127 && ! key.getModifiers().isCommandDown())
+        {
+            if (text.length() < maxLength)
+                text += juce::String::charToString (c);
+            return true;
+        }
+        return false;
+    }
+
+    bool AmbikaAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+    {
+        bool handled = false;
+        if (dialog == Dialog::Init)
+        {
+            if (key == juce::KeyPress::escapeKey)
+            {
+                dialog = Dialog::None;
+                handled = true;
+            }
+        }
+        else if (dialog != Dialog::None)
+        {
+            const int fields = dialog == Dialog::Rename ? 1 : 4;
+            if (key == juce::KeyPress::escapeKey)
+                closeDialog();
+            else if (key == juce::KeyPress::returnKey)
+                confirmDialog();
+            else if (key.getKeyCode() == juce::KeyPress::tabKey)
+                focusedField = (focusedField + (key.getModifiers().isShiftDown() ? fields - 1 : 1)) % fields;
+            else
+            {
+                dialogError.clear();
+                editText (fieldText[focusedField], key, focusedField == 3 ? 400 : 120);
+            }
+            handled = true;
+        }
+        else if (page == 3)
+        {
+            const int rows = (int) filtered.size();
+            if (key == juce::KeyPress::upKey || key == juce::KeyPress::downKey)
+            {
+                if (rows > 0)
+                {
+                    const int row = juce::jlimit (0, rows - 1, selectedRow + (key == juce::KeyPress::upKey ? -1 : 1));
+                    selectRow (row);
+                    if (row < scrollRow)
+                        scrollRow = row;
+                    else if (row >= scrollRow + kLibraryRows)
+                        scrollRow = row - kLibraryRows + 1;
+                }
+                handled = true;
+            }
+            else if (key == juce::KeyPress::returnKey)
+            {
+                loadSelected();
+                handled = true;
+            }
+            else if (key == juce::KeyPress::escapeKey)
+            {
+                search.clear();
+                applyFilter();
+                handled = true;
+            }
+            else if (editText (search, key, 60))
+            {
+                applyFilter();
+                handled = true;
+            }
+        }
+        if (handled)
+            refresh();
+        return handled;
+    }
+
+    //==========================================================================
+    // Presets
+
+    void AmbikaAudioProcessorEditor::refreshLibrary()
+    {
+        library = presets.scan();
+        applyFilter();
+    }
+
+    void AmbikaAudioProcessorEditor::applyFilter()
+    {
+        const auto previous = selectedPreset() != nullptr ? selectedPreset()->file : juce::File();
+        filtered.clear();
+        for (const auto& info : library)
+        {
+            bool ok = true;
+            for (const auto& tag : activeTags)
+                ok = ok && info.tags.contains (tag, true);
+            if (ok && search.isNotEmpty())
+                ok = info.name.containsIgnoreCase (search) || info.author.containsIgnoreCase (search)
+                     || info.comment.containsIgnoreCase (search) || info.tags.joinIntoString (" ").containsIgnoreCase (search);
+            if (ok)
+                filtered.push_back (info);
+        }
+        selectedRow = -1;
+        for (size_t i = 0; i < filtered.size(); ++i)
+            if (previous != juce::File() && filtered[i].file == previous)
+                selectedRow = (int) i;
+        scrollRow = juce::jlimit (0, juce::jmax (0, (int) filtered.size() - kLibraryRows), scrollRow);
+    }
+
+    const PresetInfo* AmbikaAudioProcessorEditor::selectedPreset() const
+    {
+        return juce::isPositiveAndBelow (selectedRow, (int) filtered.size()) ? &filtered[(size_t) selectedRow] : nullptr;
+    }
+
+    void AmbikaAudioProcessorEditor::selectRow (int row)
+    {
+        selectedRow = row;
+    }
+
+    void AmbikaAudioProcessorEditor::loadSelected()
+    {
+        const auto* info = selectedPreset();
+        if (info == nullptr)
+            return;
+        const int part = audioProcessor.editedPart();
+        const auto name = info->name;
+        const auto result = presets.load (part, info->file);
+        if (result.wasOk())
+            notify ("Loaded \"" + name + "\" into part " + juce::String (part + 1));
+        else
+            notify (result.getErrorMessage(), true);
+    }
+
+    void AmbikaAudioProcessorEditor::stepPreset (int direction)
+    {
+        const int part = audioProcessor.editedPart();
+        const auto file = presets.neighbour (part, direction);
+        if (file == juce::File())
+        {
+            notify ("No presets saved yet. Use Save as... to create one.");
+            return;
+        }
+        const auto result = presets.load (part, file);
+        if (result.failed())
+            notify (result.getErrorMessage(), true);
+    }
+
+    void AmbikaAudioProcessorEditor::quickSave()
+    {
+        const int part = audioProcessor.editedPart();
+        if (! presets.presetFile (part).existsAsFile())
+        {
+            showSaveDialog();
+            return;
+        }
+        const auto name = presets.presetName (part);
+        const auto result = presets.save (part, name, presets.presetTags (part), presets.presetAuthor (part),
+                                          presets.presetComment (part), true);
+        if (result.wasOk())
+            notify ("Saved \"" + name + "\"");
+        else
+            notify (result.getErrorMessage(), true);
+        refreshLibrary();
     }
 
     void AmbikaAudioProcessorEditor::showSaveDialog()
     {
-        content->showSaveDialog();
+        const int part = audioProcessor.editedPart();
+        const auto name = presets.presetName (part);
+        fieldText[0] = name == "Init" ? juce::String() : name;
+        dialogTags.clear();
+        juce::StringArray extra;
+        for (const auto& tag : presets.presetTags (part))
+        {
+            if (tag.equalsIgnoreCase ("Factory"))
+                continue;
+            if (PresetManager::standardTags().contains (tag, true))
+                dialogTags.add (tag);
+            else
+                extra.add (tag);
+        }
+        fieldText[1] = extra.joinIntoString (", ");
+        fieldText[2] = presets.presetAuthor (part);
+        fieldText[3] = presets.presetComment (part);
+        focusedField = 0;
+        dialogError.clear();
+        dialog = Dialog::Save;
+        refresh();
     }
 
-    void AmbikaAudioProcessorEditor::timerCallback()
+    void AmbikaAudioProcessorEditor::openRename()
     {
-        content->poll();
+        const auto* info = selectedPreset();
+        if (info == nullptr)
+            return;
+        if (info->factory)
+        {
+            notify ("Factory programs are read only", true);
+            return;
+        }
+        renaming = info->file;
+        fieldText[0] = info->name;
+        focusedField = 0;
+        dialogError.clear();
+        dialog = Dialog::Rename;
+    }
+
+    void AmbikaAudioProcessorEditor::deleteSelected()
+    {
+        const auto* info = selectedPreset();
+        if (info == nullptr)
+            return;
+        if (info->factory)
+        {
+            notify ("Factory programs are read only", true);
+            return;
+        }
+        if (! armedAtClick)
+        {
+            deleteArmed = true;
+            return;
+        }
+        const auto name = info->name;
+        const auto result = presets.remove (info->file);
+        if (result.wasOk())
+            notify ("Moved \"" + name + "\" to the Trash");
+        else
+            notify (result.getErrorMessage(), true);
+        refreshLibrary();
+    }
+
+    void AmbikaAudioProcessorEditor::loadAmbikaFile()
+    {
+        const int part = audioProcessor.editedPart();
+        chooser = std::make_unique<juce::FileChooser> ("Load an Ambika file into part " + juce::String (part + 1),
+                                                       juce::File(), ambika_format::kFilePatterns);
+        juce::Component::SafePointer<AmbikaAudioProcessorEditor> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                              [safe, part] (const juce::FileChooser& fc)
+                              {
+                                  const auto file = fc.getResult();
+                                  if (safe == nullptr || file == juce::File())
+                                      return;
+                                  const auto result = safe->presets.load (part, file);
+                                  if (result.wasOk())
+                                      safe->notify ("Loaded \"" + file.getFileName() + "\"");
+                                  else
+                                      safe->notify (result.getErrorMessage(), true);
+                                  safe->refresh();
+                              });
+    }
+
+    void AmbikaAudioProcessorEditor::importToLibrary()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Add Ambika files to the eureka! library", juce::File(),
+                                                       ambika_format::kFilePatterns);
+        juce::Component::SafePointer<AmbikaAudioProcessorEditor> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::canSelectMultipleItems,
+                              [safe] (const juce::FileChooser& fc)
+                              {
+                                  const auto files = fc.getResults();
+                                  if (safe == nullptr || files.isEmpty())
+                                      return;
+                                  juce::StringArray errors;
+                                  const int added = safe->presets.importToLibrary (files, errors);
+                                  juce::String message = "Added " + juce::String (added) + " preset(s) to Imported";
+                                  if (! errors.isEmpty())
+                                      message << " (" << errors.size() << " skipped: " << errors[0] << ")";
+                                  safe->notify (message, added == 0);
+                                  safe->refreshLibrary();
+                                  safe->refresh();
+                              });
+    }
+
+    void AmbikaAudioProcessorEditor::confirmDialog()
+    {
+        const auto name = fieldText[0].trim();
+        if (name.isEmpty())
+            return;
+        if (dialog == Dialog::Rename)
+        {
+            if (dialogClash())
+                return;
+            const auto result = presets.rename (renaming, name);
+            if (result.failed())
+            {
+                dialogError = result.getErrorMessage();
+                return;
+            }
+            notify ("Renamed to \"" + name + "\"");
+        }
+        else if (dialog == Dialog::Save)
+        {
+            auto tags = dialogTags;
+            for (const auto& t : juce::StringArray::fromTokens (fieldText[1], ",", ""))
+                if (t.trim().isNotEmpty() && ! tags.contains (t.trim(), true))
+                    tags.add (t.trim());
+            const auto result = presets.save (audioProcessor.editedPart(), name, tags, fieldText[2].trim(),
+                                              fieldText[3].trim(), true);
+            if (result.failed())
+            {
+                dialogError = result.getErrorMessage();
+                return;
+            }
+            notify ("Saved \"" + name + "\"");
+        }
+        closeDialog();
+        refreshLibrary();
+    }
+
+    void AmbikaAudioProcessorEditor::closeDialog()
+    {
+        dialog = Dialog::None;
+        dialogError.clear();
     }
 }

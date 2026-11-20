@@ -227,6 +227,7 @@ namespace ambika_plugin
         auto tree = state.copyState();
         tree.setProperty ("stateVersion", kStateVersion, nullptr);
         tree.setProperty ("editedPart", editedPart(), nullptr);
+        tree.setProperty ("editorZoom", editorZoom(), nullptr);
         presetManager.writeState (tree);
         if (auto xml = tree.createXml())
             copyXmlToBinary (*xml, destData);
@@ -240,6 +241,7 @@ namespace ambika_plugin
             {
                 auto tree = juce::ValueTree::fromXml (*xml);
                 setEditedPart (tree.getProperty ("editedPart", 0));
+                setEditorZoom (tree.getProperty ("editorZoom", 2));
                 // Version 1 states have no multi parameters; replaceState leaves
                 // them at their defaults (part 1, all voices, all channels).
                 state.replaceState (tree);

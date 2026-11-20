@@ -53,6 +53,9 @@ namespace ambika_plugin
         // The part shown in the editor; saved with the project.
         int editedPart() const { return editedPartIndex.load(); }
         void setEditedPart (int part) { editedPartIndex = juce::jlimit (0, kNumParts - 1, part); }
+        // Editor pixel zoom (1, 2 or 3); saved with the project.
+        int editorZoom() const { return editorZoomFactor.load(); }
+        void setEditorZoom (int zoom) { editorZoomFactor = juce::jlimit (1, 3, zoom); }
 
     private:
         void applyParameters();
@@ -80,6 +83,7 @@ namespace ambika_plugin
         std::array<std::atomic<uint8_t>, kNumVoices> voiceLevels {};
         std::array<std::atomic<uint8_t>, kNumVoices> voiceOwners {};
         std::atomic<int> editedPartIndex { 0 };
+        std::atomic<int> editorZoomFactor { 2 };
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AmbikaAudioProcessor)
     };

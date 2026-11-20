@@ -293,7 +293,12 @@ namespace ambika_plugin
 
     bool PresetManager::isFactory (const juce::File& file)
     {
-        return file.getFullPathName().startsWith (kFactoryRoot);
+        // On Windows juce::File makes "/eureka-factory/x" into "C:\eureka-factory\x":
+        // compare with the drive letter removed and forward slashes.
+        auto path = file.getFullPathName().replaceCharacter ('\\', '/');
+        if (path.length() > 1 && path[1] == ':')
+            path = path.substring (2);
+        return path.startsWith (kFactoryRoot);
     }
 
     bool PresetManager::isEurekaPreset (const juce::File& file)
