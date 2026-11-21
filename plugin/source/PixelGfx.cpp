@@ -200,7 +200,7 @@ namespace ambika_plugin::pixel
         }
     }
 
-    void Canvas::logo (int x, int y, int k)
+    void Canvas::logo (int x, int y, int k, int look)
     {
         int cx = 0;
         for (const char ch : std::string ("eureka!"))
@@ -216,7 +216,14 @@ namespace ambika_plugin::pixel
                     gw = std::max (gw, len);
                     for (int j = 0; j < len; ++j)
                         if (g.rows[i][j] == '1')
-                            fill (x + (cx + j) * k, y + i * k, k, k, ramp ({ WH, LT, LT, MID, D3 }, i / 10.0, cx + j, i));
+                        {
+                            const double f = i / 10.0;
+                            const int ink = look == 1 ? (int) BLK
+                                          : look == 2 ? ramp ({ WH, WH, WH, LT }, f, cx + j, i)
+                                          : look == 3 ? ramp ({ LED_ON, LED_ON, LED_OFF }, f, cx + j, i)
+                                                      : ramp ({ WH, LT, LT, MID, D3 }, f, cx + j, i);
+                            fill (x + (cx + j) * k, y + i * k, k, k, ink);
+                        }
                 }
                 cx += gw + 1;
             }
@@ -243,19 +250,37 @@ namespace ambika_plugin::pixel
 
     void Canvas::headerBand (int x, int y, int width, int textWidth, int style)
     {
-        if (style <= 0)
+        if (style <= 0 || style == 8)
         {
             band (x, y, width);
+            if (style == 8)
+                fill (x, y + 8, width, 1, LED_ON);
             return;
         }
+        static const int fills[] = { NAVY, NAVY, NAVY, WOOD_DK, VOFF, LED_OFF, LT, LT, D1, LED_ON };
+        const int ink = fills[std::clamp (style, 0, 9)];
         const int solid = style == 1 ? width : std::min (width, textWidth + 10);
-        fill (x, y, solid, 9, NAVY);
+        fill (x, y, solid, 9, ink);
         const int fade = std::min (width - solid, 40);
         for (int dx = 0; dx < width - solid; ++dx)
             for (int row = 0; row < 9; ++row)
-                put (x + solid + dx, y + row,
-                     dx < fade ? ramp ({ NAVY, BLK }, (dx + 0.5) / fade, x + solid + dx, y + row) : (int) BLK);
+            {
+                const int cx = x + solid + dx, cy = y + row;
+                const double f = (dx + 0.5) / std::max (1, fade);
+                put (cx, cy, dx >= fade ? (int) BLK
+                                 : ink == LT ? ramp ({ LT, MID, D3, D2, BLK }, f, cx, cy)
+                                 : ink == LED_ON ? ramp ({ LED_ON, LED_OFF, BLK }, f, cx, cy)
+                                                 : ramp ({ ink, (int) BLK }, f, cx, cy));
+            }
         fill (x, y + 9, width, 1, BLK);
+    }
+
+    void Canvas::frame (int x, int y, int width, int height, int ink)
+    {
+        fill (x, y, width, 1, ink);
+        fill (x, y + height - 1, width, 1, ink);
+        fill (x, y, 1, height, ink);
+        fill (x + width - 1, y, 1, height, ink);
     }
 
     void Canvas::well (int x, int y, int width, int height)

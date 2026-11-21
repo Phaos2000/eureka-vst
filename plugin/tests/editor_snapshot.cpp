@@ -166,19 +166,108 @@ int main (int argc, char** argv)
     editor->showPage (3);
     snapshot (*editor, dir, "presets");
 
-    editor->showPage (0);
-    editor->showSaveDialog();
-    snapshot (*editor, dir, "save-dialog");
-
-    // The three section header looks, on the synth page.
+    // The section header looks, on the synth page.
     editor->showPage (0);
     editor->focusParameter ("osc1_shape");
-    for (int style = 0; style < 3; ++style)
+    for (int style = 0; style < 10; ++style)
     {
         editor->setHeaderStyle (style);
         snapshot (*editor, dir, "header-style-" + juce::String (style));
     }
-    editor->setHeaderStyle (2);
+
+    // Comparison sheet of the header options, written beside the snapshot
+    // directory. The purple row recolours the navy ink, so it is a mock-up
+    // outside the 16-colour palette.
+    {
+        struct Option { int style; const char* label; bool purple; };
+        static const Option options[] = {
+            { 2, "1  Navy, white text (current)", false },
+            { 3, "2  Wood brown, gold text", false },
+            { 4, "3  Dark teal, bright teal text", false },
+            { 5, "4  Dark red, white text", false },
+            { 6, "5  Silver, black text", false },
+            { 7, "6  Silver, dark red text", false },
+            { 8, "7  Silkscreen: plain band, white text, red rule", false },
+            { 2, "8  Royal purple, white text (would replace navy in the palette)", true },
+            { 9, "9  Bright red, white text", false } };
+        const int count = (int) std::size (options);
+        const int cropY = 132, cropH = 220, labelH = 24, w = Editor::canvasWidth * 2;
+        juce::Image sheet (juce::Image::ARGB, w, count * (cropH + labelH), true, juce::SoftwareImageType());
+        {
+            juce::Graphics g (sheet);
+            g.fillAll (juce::Colours::black);
+            g.setFont (16.0f);
+            for (int i = 0; i < count; ++i)
+            {
+                editor->setHeaderStyle (options[i].style);
+                auto image = editor->renderCanvas().toImage (4);
+                if (options[i].purple)
+                    for (int y = cropY; y < cropY + cropH; ++y)
+                        for (int x = 0; x < w; ++x)
+                            if (image.getPixelAt (x, y) == juce::Colour (0xff000080))
+                                image.setPixelAt (x, y, juce::Colour (0xff4a1090));
+                const int top = i * (cropH + labelH);
+                g.setColour (juce::Colours::white);
+                g.drawText (options[i].label, 8, top, w - 16, labelH, juce::Justification::centredLeft);
+                g.drawImage (image, 0, top + labelH, w, cropH, 0, cropY, w, cropH);
+            }
+        }
+        const auto optionsDir = dir.getSiblingFile ("header-options");
+        optionsDir.createDirectory();
+        writePng (sheet, optionsDir.getChildFile ("sheet.png"));
+    }
+
+    // Full-page mock-ups of the red and silver looks. Each shows the page with
+    // the logo on a panel in the header colour and, under it, the top strip
+    // with the other logo treatment (letters in the header colour on black).
+    {
+        struct Mock { int style; const char* file; const char* label; const char* other; };
+        static const Mock mocks[] = {
+            { 5, "mock-dark-red.png", "Dark red headers, white text.  Logo A: white letters on a dark red panel", "Logo B: red letters on black" },
+            { 9, "mock-bright-red.png", "Bright red headers, white text.  Logo A: white letters on a red panel", "Logo B: red letters on black" },
+            { 6, "mock-silver.png", "Silver headers, black text.  Logo A: black letters on a silver panel", "Logo B: silver letters on black (the logo as it is now)" } };
+        const int w = Editor::canvasWidth * 2, pageH = Editor::canvasHeight * 2, stripH = 232, labelH = 24;
+        const auto optionsDir = dir.getSiblingFile ("header-options");
+        for (const auto& mock : mocks)
+        {
+            juce::Image out (juce::Image::ARGB, w, labelH + pageH + labelH + stripH, true, juce::SoftwareImageType());
+            {
+                juce::Graphics g (out);
+                g.fillAll (juce::Colours::black);
+                g.setFont (16.0f);
+                g.setColour (juce::Colours::white);
+                editor->setHeaderStyle (mock.style);
+                editor->setLogoVariant (0);
+                g.drawText (mock.label, 8, 0, w - 16, labelH, juce::Justification::centredLeft);
+                g.drawImageAt (editor->renderCanvas().toImage (4), 0, labelH);
+                editor->setLogoVariant (1);
+                g.drawText (mock.other, 8, labelH + pageH, w - 16, labelH, juce::Justification::centredLeft);
+                g.drawImage (editor->renderCanvas().toImage (4), 0, labelH + pageH + labelH, w, stripH, 0, 0, w, stripH);
+            }
+            writePng (out, optionsDir.getChildFile (mock.file));
+        }
+        {
+            juce::Image out (juce::Image::ARGB, w, labelH + pageH + labelH + stripH, true, juce::SoftwareImageType());
+            juce::Graphics g (out);
+            g.fillAll (juce::Colours::black);
+            g.setFont (16.0f);
+            g.setColour (juce::Colours::white);
+            editor->setHeaderStyle (5);
+            editor->setLogoVariant (2);
+            g.drawText ("Dark red headers.  Logo C: white letters on black", 8, 0, w - 16, labelH, juce::Justification::centredLeft);
+            g.drawImageAt (editor->renderCanvas().toImage (4), 0, labelH);
+            editor->setLogoVariant (1);
+            g.drawText ("Logo B: red letters on black (current)", 8, labelH + pageH, w - 16, labelH, juce::Justification::centredLeft);
+            g.drawImage (editor->renderCanvas().toImage (4), 0, labelH + pageH + labelH, w, stripH, 0, 0, w, stripH);
+            writePng (out, optionsDir.getChildFile ("mock-logo-white.png"));
+        }
+        editor->setLogoVariant (1);
+    }
+    editor->setHeaderStyle (5);
+
+    editor->showPage (0);
+    editor->showSaveDialog();
+    snapshot (*editor, dir, "save-dialog");
 
     // Zoom: the window follows, and the setting is kept in the plug-in state.
     editor->setZoom (6);

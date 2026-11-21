@@ -45,8 +45,11 @@ namespace ambika_plugin
         void setZoom (int halves);
         int zoom() const { return zoomHalves; }
         int scaled (int canvasPixels) const { return canvasPixels * zoomHalves / 2; }
-        // Section header look: 0 grey, 1 navy, 2 navy fading to black.
+        // Section header look: see Canvas::headerBand for the styles.
         void setHeaderStyle (int style);
+        // Logo treatment for the red and silver header styles: 0 letters on a
+        // panel in the header colour, 1 letters in the header colour on black.
+        void setLogoVariant (int variant);
         // Touches a control as if it had been clicked (the display follows it);
         // engine id for part parameters, host id otherwise.
         void focusParameter (const juce::String& id, bool asEdit = false);  // asEdit: show the detailed line
@@ -109,6 +112,10 @@ namespace ambika_plugin
         void drawInitPopup();
         void drawScope (int x, int y, int w, int h, juce::String& caption);
         void sectionBand (int x, int y, int w, const juce::String& title, const juce::String& right = {});
+        // Faint outline in the header colour around a section occupying rows y to y + h - 1.
+        // It runs one pixel outside the section at the top and sides and replaces the
+        // section's last row (the black line under its bottom band), so call it after the bands.
+        void sectionFrame (int x, int y, int w, int h);
         void knob (int cx, int cy, int r, int labelBandY, juce::RangedAudioParameter* p, const juce::String& label,
                    const juce::String& shortName, const juce::String& section, bool enabled = true, int maxIndex = -1);
         void textField (int x, int y, int w, const juce::String& label, int field);
@@ -144,7 +151,8 @@ namespace ambika_plugin
         std::vector<uint8_t> shownPixels;
         juce::Image image;
         int zoomHalves = 4;
-        int headerStyle = 2;
+        int headerStyle = 5;
+        int logoVariant = 1;
         int page = 0;
         int matrixPage = 0;
         int selectedSlot = 0;

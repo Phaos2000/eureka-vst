@@ -86,11 +86,16 @@ namespace ambika_plugin::pixel
 
         // The faceplate.
         void plate();
-        void logo (int x, int y, int k);
+        // Letter looks: 0 silver ramp, 1 black, 2 white, 3 red ramp.
+        void logo (int x, int y, int k, int look = 0);
         void well (int x, int y, int width, int height);
         void band (int x, int y, int width);
         // Section header: style 0 grey, 1 solid navy, 2 navy under the title dithering into black.
+        // Styles: 0 grey, 1 solid navy, 2 navy fade, 3 brown fade, 4 teal fade, 5 red fade,
+        // 6 and 7 silver fade, 8 plain band with a red rule (silkscreen), 9 bright red fade.
         void headerBand (int x, int y, int width, int textWidth, int style);
+        // One pixel outline.
+        void frame (int x, int y, int width, int height, int ink);
         void led (int x, int y, bool on);
         void button (int x, int y, int width, const juce::String& label, bool on, bool withLed = true);
         // r = 15 (large) or 11 (small); value 0..1.

@@ -18,7 +18,7 @@ namespace ambika_plugin
     {
         constexpr juce::uint32 kDetailMs = 1500;  // detailed display line after an edit
         constexpr juce::uint32 kToastMs = 3000;
-        constexpr int kLibraryRows = 18;
+        constexpr int kLibraryRows = 15;
 
         // Synth page rows: section band, knob centre, label band.
         constexpr int kRowY[] { 120, 188, 256, 324 };
@@ -149,7 +149,22 @@ namespace ambika_plugin
         c.plate();
         c.well (24, 16, 104, 40);
         c.fill (26, 18, 100, 36, BLK);
-        c.logo (32, 25, 2);
+        {
+            // The logo follows the section headers.
+            const bool red = headerStyle == 5 || headerStyle == 9;
+            const bool silver = headerStyle == 6 || headerStyle == 7;
+            if ((red || silver) && logoVariant == 0)
+                for (int yy = 0; yy < 36; ++yy)
+                    for (int xx = 0; xx < 100; ++xx)
+                    {
+                        const double f = yy / 35.0;
+                        c.fill (26 + xx, 18 + yy, 1, 1,
+                                silver ? Canvas::ramp ({ WH, LT, LT, MID }, f, xx, yy)
+                                : headerStyle == 9 ? Canvas::ramp ({ LED_ON, LED_ON, LED_OFF }, f, xx, yy)
+                                                   : Canvas::ramp ({ LED_OFF, LED_OFF, LED_OFF, BLK }, f, xx, yy));
+                    }
+            c.logo (32, 25, 2, logoVariant == 2 ? 2 : red ? (logoVariant == 0 ? 2 : 3) : silver && logoVariant == 0 ? 1 : 0);
+        }
         c.well (136, 16, 256, 40);
         c.fill (140, 20, 248, 32, BLK);
         c.well (400, 16, 216, 40);
@@ -271,10 +286,19 @@ namespace ambika_plugin
 
     void AmbikaAudioProcessorEditor::sectionBand (int x, int y, int w, const juce::String& title, const juce::String& right)
     {
+        static const int titleInks[] = { LT, WH, WH, GOLD, VON, WH, BLK, LED_OFF, WH, WH };
+        static const int rightInks[] = { MID, LT, LT, LT, LT, LT, LT, LT, MID, LT };
         canvas.headerBand (x, y, w, Canvas::width3 (title) + 4, headerStyle);
-        canvas.text3 (title, x + 4, y + 2, headerStyle > 0 ? WH : LT);
+        canvas.text3 (title, x + 4, y + 2, titleInks[headerStyle]);
         if (right.isNotEmpty())
-            canvas.text3 (right, x + w - 4 - Canvas::width3 (right), y + 2, headerStyle > 0 ? LT : MID);
+            canvas.text3 (right, x + w - 4 - Canvas::width3 (right), y + 2, rightInks[headerStyle]);
+    }
+
+    void AmbikaAudioProcessorEditor::sectionFrame (int x, int y, int w, int h)
+    {
+        static const int inks[] = { -1, NAVY, NAVY, WOOD_DK, VOFF, LED_OFF, D3, D3, LED_OFF, LED_OFF };
+        if (inks[headerStyle] >= 0)
+            canvas.frame (x - 1, y - 1, w + 2, h + 1, inks[headerStyle]);
     }
 
     void AmbikaAudioProcessorEditor::knob (int cx, int cy, int r, int labelBandY, juce::RangedAudioParameter* p,
@@ -373,43 +397,52 @@ namespace ambika_plugin
         }
         canvas.vfd (409, 28, line0, line1, 33);
 
+        // The control row. Each group is a box whose edges line up with the
+        // sections of the first row below; the buttons sit two pixels inside it.
+        constexpr int by = 79, bandY = by + 24, boxY = by - 10, boxH = 44;
+
         // Parts.
         for (int i = 0; i < kNumParts; ++i)
-            button (24 + i * 24, 80, 20, juce::String (i + 1), i == part, [this, i] { editPart (i); });
-        sectionBand (24, 104, 140, "PART");
+            button (26 + i * 24, by, 20, juce::String (i + 1), i == part, [this, i] { editPart (i); });
+        sectionBand (24, bandY, 144, "PART");
+        sectionFrame (24, boxY, 144, boxH);
 
         // Pages.
         static const char* const pageNames[] { "SYNTH", "MOD", "MULTI", "PRESETS" };
         for (int i = 0; i < 4; ++i)
-            button (176 + i * 44, 80, 40, pageNames[i], i == page, [this, i] { showPage (i); });
-        sectionBand (176, 104, 172, "PAGE");
+            button (178 + i * 36, by, 32, pageNames[i], i == page, [this, i] { showPage (i); });
+        sectionBand (176, bandY, 144, "PAGE");
+        sectionFrame (176, boxY, 144, boxH);
 
         // Program.
-        button (360, 80, 16, "<", false, [this] { stepPreset (-1); }, false);
-        button (380, 80, 16, ">", false, [this] { stepPreset (1); }, false);
-        button (400, 80, 24, "SAVE", false, [this] { quickSave(); }, false);
-        button (428, 80, 32, "SAVE AS", false, [this] { showSaveDialog(); }, false);
-        button (464, 80, 24, "INIT", dialog == Dialog::Init, [this] { dialog = Dialog::Init; }, false);
-        sectionBand (360, 104, 128, "PROGRAM");
+        button (330, by, 18, "<", false, [this] { stepPreset (-1); }, false);
+        button (352, by, 18, ">", false, [this] { stepPreset (1); }, false);
+        button (374, by, 24, "SAVE", false, [this] { quickSave(); }, false);
+        button (402, by, 32, "SAVE AS", false, [this] { showSaveDialog(); }, false);
+        button (438, by, 24, "INIT", dialog == Dialog::Init, [this] { dialog = Dialog::Init; }, false);
+        sectionBand (328, bandY, 136, "PROGRAM");
+        sectionFrame (328, boxY, 136, boxH);
 
         // Zoom.
         {
             static const char* const labels[] = { "1X", "1.5X", "2X", "3X" };
             static const int halves[] = { 2, 3, 4, 6 };
-            static const int widths[] = { 16, 22, 16, 16 };
-            int bx = 494;
+            static const int widths[] = { 18, 26, 20, 20 };
+            int bx = 474;
             for (int i = 0; i < 4; ++i)
             {
                 const int h = halves[i];
-                button (bx, 80, widths[i], labels[i], zoomHalves == h, [this, h] { setZoom (h); });
-                bx += widths[i] + 2;
+                button (bx, by, widths[i], labels[i], zoomHalves == h, [this, h] { setZoom (h); });
+                bx += widths[i] + 4;
             }
         }
-        sectionBand (494, 104, 76, "ZOOM");
+        sectionBand (472, bandY, 100, "ZOOM");
+        sectionFrame (472, boxY, 100, boxH);
 
         // Output level.
-        canvas.band (580, 104, 36);
-        knob (598, 86, 11, 104, parameter (kOutputGainId), "OUT", "out", "output");
+        canvas.band (580, bandY, 36);
+        sectionFrame (580, boxY, 36, boxH);
+        knob (598, by + 6, 11, bandY, parameter (kOutputGainId), "OUT", "out", "output");
     }
 
     //==========================================================================
@@ -450,8 +483,10 @@ namespace ambika_plugin
                     name = name.substring (0, 1).toUpperCase() + name.substring (1);
                     focusLine = i / 4;
                 }
-                cell << name.paddedRight (' ', 4)
-                     << valueText (group[(size_t) i]->param).substring (0, 4).paddedLeft (' ', 4) << ' ';
+                auto value = valueText (group[(size_t) i]->param);
+                if (value.length() > 4)
+                    value = value.replace ("part ", "p").removeCharacters (" ");
+                cell << name.paddedRight (' ', 4) << ' ' << value.substring (0, 4).paddedLeft (' ', 4);
             }
             else
                 cell = cell.paddedRight (' ', 10);
@@ -489,6 +524,7 @@ namespace ambika_plugin
             const int w = (int) specs.size() * kPitch;
             sectionBand (x, y, w, title);
             canvas.band (x, y + 43, w);
+            sectionFrame (x, y, w, 53);
             int i = 0;
             for (const auto& s : specs)
             {
@@ -558,9 +594,10 @@ namespace ambika_plugin
 
         // Scope: the waveform, curve or response of the section being edited.
         juce::String caption;
-        canvas.well (320, 336, 296, 41);
-        drawScope (324, 340, 288, 33, caption);
+        canvas.well (320, 336, 296, 40);
+        drawScope (324, 340, 288, 32, caption);
         sectionBand (320, kRowY[3], 296, "SCOPE", caption);
+        sectionFrame (320, kRowY[3], 296, 53);
     }
 
     void AmbikaAudioProcessorEditor::drawScope (int x, int y, int w, int h, juce::String& caption)
@@ -716,14 +753,14 @@ namespace ambika_plugin
         const int first = matrixPage * 8;
         sectionBand (24, 120, 592, "MODULATION MATRIX",
                      "SLOTS " + juce::String (first + 1) + "-" + juce::String (first + 8) + " OF 16");
-        canvas.well (24, 132, 592, 112);
-        canvas.fill (28, 136, 584, 104, BLK);
+        canvas.well (24, 132, 592, 108);
+        canvas.fill (28, 136, 584, 100, BLK);
 
         for (int i = 0; i < 8; ++i)
         {
             const int slot = first + i;
             const juce::String n (slot + 1);
-            const int y = 143 + i * 12;
+            const int y = 141 + i * 12;
             const bool selected = slot == selectedSlot;
             auto* source = partParameter ("mod" + n + "_source");
             auto* destination = partParameter ("mod" + n + "_destination");
@@ -772,24 +809,30 @@ namespace ambika_plugin
             hits.push_back (std::move (h));
         }
 
+        sectionFrame (24, 120, 592, 121);
+
         // Matrix page buttons.
-        sectionBand (24, 252, 72, "PAGE");
-        button (24, 276, 32, "1-8", matrixPage == 0, [this] { showMatrixPage (0); });
-        button (64, 276, 32, "9-16", matrixPage == 1, [this] { showMatrixPage (1); });
+        sectionBand (24, kRowY[2], 72, "PAGE");
+        canvas.band (24, kRowY[2] + 43, 72);
+        button (26, kRowY[2] + 22, 32, "1-8", matrixPage == 0, [this] { showMatrixPage (0); });
+        button (62, kRowY[2] + 22, 32, "9-16", matrixPage == 1, [this] { showMatrixPage (1); });
+        sectionFrame (24, kRowY[2], 72, 53);
 
         // Selected slot.
         const juce::String n (selectedSlot + 1);
         const juce::String slotSection = "slot " + n;
-        sectionBand (104, 252, 108, "SLOT " + n.paddedLeft ('0', 2));
-        canvas.band (104, 295, 108);
-        knob (122, 277, 11, 295, partParameter ("mod" + n + "_source"), "SOURCE", "src", slotSection);
-        knob (158, 277, 11, 295, partParameter ("mod" + n + "_destination"), "DEST", "dst", slotSection);
-        knob (194, 277, 11, 295, partParameter ("mod" + n + "_amount"), "AMOUNT", "amt", slotSection);
+        const int slotY = kRowY[2], slotBand = slotY + 43, slotKnob = slotY + 25;
+        sectionBand (104, slotY, 108, "SLOT " + n.paddedLeft ('0', 2));
+        canvas.band (104, slotBand, 108);
+        knob (122, slotKnob, 11, slotBand, partParameter ("mod" + n + "_source"), "SOURCE", "src", slotSection);
+        knob (158, slotKnob, 11, slotBand, partParameter ("mod" + n + "_destination"), "DEST", "dst", slotSection);
+        knob (194, slotKnob, 11, slotBand, partParameter ("mod" + n + "_amount"), "AMOUNT", "amt", slotSection);
+        sectionFrame (104, slotY, 108, 53);
 
         // Notes.
-        sectionBand (220, 252, 396, "NOTES");
-        canvas.well (220, 262, 396, 32);
-        canvas.fill (222, 264, 392, 28, BLK);
+        sectionBand (220, kRowY[2], 396, "NOTES");
+        canvas.well (220, kRowY[2] + 12, 396, 40);
+        canvas.fill (222, kRowY[2] + 14, 392, 36, BLK);
         juce::String note0, note1;
         if (focus.section.startsWith ("modifier"))
         {
@@ -807,7 +850,8 @@ namespace ambika_plugin
             note1 = selectedSlot == 13 ? "slot 14 is scaled by the mod wheel, as on the hardware."
                                        : "click a row to pick its slot; drag a row to set its amount.";
         }
-        canvas.vfd (225, 270, note0, note1, 64);
+        canvas.vfd (226, kRowY[2] + 24, note0, note1, 64);
+        sectionFrame (220, kRowY[2], 396, 53);
 
         // Modifiers.
         for (int m = 0; m < 4; ++m)
@@ -815,16 +859,19 @@ namespace ambika_plugin
             const int x = 24 + m * 116;
             const juce::String k (m + 1);
             const juce::String section = "modifier " + k;
-            sectionBand (x, 320, 108, "MODIFIER " + k);
-            canvas.band (x, 363, 108);
-            knob (x + 18, 345, 11, 363, partParameter ("modifier" + k + "_in1"), "IN 1", "in1", section);
-            knob (x + 54, 345, 11, 363, partParameter ("modifier" + k + "_operator"), "OP", "op", section);
-            knob (x + 90, 345, 11, 363, partParameter ("modifier" + k + "_in2"), "IN 2", "in2", section);
+            const int y = kRowY[3];
+            sectionBand (x, y, 108, "MODIFIER " + k);
+            canvas.band (x, y + 43, 108);
+            knob (x + 18, y + 25, 11, y + 43, partParameter ("modifier" + k + "_in1"), "IN 1", "in1", section);
+            knob (x + 54, y + 25, 11, y + 43, partParameter ("modifier" + k + "_operator"), "OP", "op", section);
+            knob (x + 90, y + 25, 11, y + 43, partParameter ("modifier" + k + "_in2"), "IN 2", "in2", section);
+            sectionFrame (x, y, 108, 53);
         }
-        canvas.text3c ("6 PART", 552, 334, MID);
-        canvas.text3c ("HYBRID", 552, 342, MID);
-        canvas.text3c ("POLYSYNTH", 552, 350, MID);
-        canvas.fill (504, 360, 96, 1, D3);
+        // Maker's print, placed as on the synth page.
+        canvas.text3c ("6 PART", 552, kRowY[3] + 14, MID);
+        canvas.text3c ("HYBRID", 552, kRowY[3] + 22, MID);
+        canvas.text3c ("POLYSYNTH", 552, kRowY[3] + 30, MID);
+        canvas.fill (520, kRowY[3] + 40, 64, 1, D3);
     }
 
     //==========================================================================
@@ -840,16 +887,18 @@ namespace ambika_plugin
             const int x = 24 + v * 100;
             const int owner = rawInt (voicePartId (v)) - 1;  // -1 = off
             sectionBand (x, 120, 92, "VOICE " + juce::String (v + 1));
-            canvas.well (x, 132, 92, 20);
-            canvas.fill (x + 2, 134, 88, 16, BLK);
-            const juce::String text = owner < 0 ? juce::String ("off")
-                                                : juce::String (owner + 1) + " " + lower (presets.presetName (owner));
-            canvas.vfd (x + 7, 138, juce::StringArray { text }, 13);
-            canvas.band (x, 196, 92);
-            knob (x + 20, 176, 11, 196, parameter (voicePartId (v)), "PART", "v" + juce::String (v + 1), "voices");
-            canvas.button (x + 44, 170, 40, "EDIT", owner >= 0 && owner == edited, true);
-            canvas.led (x + 62, 162, audioProcessor.voiceLevel (v) > 8);
-            addHit ({ x + 43, 169, 42, 18 }, [this, owner]
+            canvas.well (x, 132, 92, 29);
+            canvas.fill (x + 2, 134, 88, 25, BLK);
+            const juce::StringArray text = owner < 0 ? juce::StringArray { "off", "" }
+                                                     : juce::StringArray { "part " + juce::String (owner + 1),
+                                                                           lower (presets.presetName (owner)) };
+            canvas.vfd (x + 7, 138, text, 13);
+            canvas.band (x, 207, 92);
+            knob (x + 19, 184, 11, 207, parameter (voicePartId (v)), "PART", "v" + juce::String (v + 1), "voices");
+            canvas.button (x + 43, 179, 40, "EDIT", owner >= 0 && owner == edited, true);
+            canvas.led (x + 61, 171, audioProcessor.voiceLevel (v) > 8);
+            sectionFrame (x, 120, 92, 97);
+            addHit ({ x + 42, 178, 42, 18 }, [this, owner]
             {
                 if (owner >= 0)
                 {
@@ -862,13 +911,13 @@ namespace ambika_plugin
         // Allocation.
         const int mode = rawInt (kVoiceModeId);
         const int unison = rawInt (kUnisonId);
-        sectionBand (24, 216, 184, "VOICE ALLOCATION");
-        canvas.band (24, 259, 72);
-        knob (42, 241, 11, 259, parameter (kVoiceModeId), "MODE", "mode", "allocation");
-        knob (78, 241, 11, 259, parameter (kUnisonId), "UNISON", "uni", "allocation", mode != 0);
-        canvas.well (100, 226, 108, 24);
-        canvas.fill (102, 228, 104, 20, BLK);
-        canvas.vfd (106, 230, "mode " + valueText (parameter (kVoiceModeId)),
+        sectionBand (24, 232, 184, "VOICE ALLOCATION");
+        canvas.band (24, 275, 72);
+        knob (42, 257, 11, 275, parameter (kVoiceModeId), "MODE", "mode", "allocation");
+        knob (78, 257, 11, 275, parameter (kUnisonId), "UNISON", "uni", "allocation", mode != 0);
+        canvas.well (100, 244, 108, 24);
+        canvas.fill (102, 246, 104, 20, BLK);
+        canvas.vfd (106, 248, "mode " + valueText (parameter (kVoiceModeId)),
                     "unison " + (mode == 0 ? juce::String ("-") : juce::String (unison)), 16);
 
         juce::String description;
@@ -885,42 +934,45 @@ namespace ambika_plugin
                                              + " cards at once (detuned by each part's Spread)."
                                        : juce::String (" Raise Unison to play 2-6 cards per note."));
         }
-        canvas.well (24, 272, 184, 100);
-        canvas.fill (26, 274, 180, 96, BLK);
+        canvas.well (24, 287, 184, 89);
+        canvas.fill (26, 289, 180, 85, BLK);
         auto lines = wrap (lower (description), 29);
-        lines.removeRange (10, lines.size());
-        canvas.vfd (29, 277, lines, 29);
+        lines.removeRange (9, lines.size());
+        canvas.vfd (29, 292, lines, 29);
+        sectionFrame (24, 232, 184, 145);
 
         // Key ranges.
-        sectionBand (216, 216, 400, "KEY RANGES");
-        canvas.well (216, 228, 400, 64);
-        canvas.fill (218, 230, 396, 60, BLK);
+        sectionBand (216, 232, 400, "KEY RANGES");
+        canvas.well (216, 244, 400, 64);
+        canvas.fill (218, 246, 396, 60, BLK);
         for (int p = 0; p < kNumParts; ++p)
         {
-            const int y = 236 + p * 9;
+            const int y = 250 + p * 9;
             const int low = rawInt (partKeyLowId (p)), high = rawInt (partKeyHighId (p));
             const int ink = p == edited ? VON : VHALO;
             canvas.text5 ("p" + juce::String (p + 1) + " " + lower (noteName (low)).paddedRight (' ', 3) + " "
                               + lower (noteName (high)),
-                          224, y, ink);
+                          222, y, ink);
             for (int note = 0; note < 128; ++note)
             {
                 const int pc = note % 12;
                 const bool black = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
                 const bool in = note >= low && note <= high;
-                canvas.fill (290 + note * 2, y, 2, 7, in ? (black ? VHALO : VON) : (pc == 0 ? VHALO : VOFF));
+                canvas.fill (288 + note * 2, y, 2, 7, in ? (black ? VHALO : VON) : (pc == 0 ? VHALO : VOFF));
             }
-            canvas.text5 (lower (presets.presetName (p)).substring (0, 10), 552, y, ink);
+            canvas.text5 (lower (presets.presetName (p)).substring (0, 10), 550, y, ink);
         }
+        sectionFrame (216, 232, 400, 77);
         for (int p = 0; p < kNumParts; ++p)
         {
-            const int x = 216 + p * 66;
+            const int x = 216 + p * 68, y = kRowY[3];
             const juce::String n (p + 1);
             const juce::String section = p < 4 ? "keys 1-4" : "keys 5-6";
-            sectionBand (x, 300, 62, "PART " + n);
-            canvas.band (x, 343, 62);
-            knob (x + 16, 325, 11, 343, parameter (partKeyLowId (p)), "LOW", n + "lo", section);
-            knob (x + 48, 325, 11, 343, parameter (partKeyHighId (p)), "HIGH", n + "hi", section);
+            sectionBand (x, y, 60, "PART " + n);
+            canvas.band (x, y + 43, 60);
+            knob (x + 15, y + 25, 11, y + 43, parameter (partKeyLowId (p)), "LOW", n + "lo", section);
+            knob (x + 45, y + 25, 11, y + 43, parameter (partKeyHighId (p)), "HIGH", n + "hi", section);
+            sectionFrame (x, y, 60, 53);
         }
     }
 
@@ -945,17 +997,18 @@ namespace ambika_plugin
         canvas.fill (26, 134, 372, 16, BLK);
         canvas.vfd (29, 138, juce::StringArray { lower (search) + "_" }, 61);
         addHit ({ 24, 132, 376, 20 }, [this] { search.clear(); applyFilter(); });
+        sectionFrame (24, 120, 376, 33);
 
         // Library.
-        sectionBand (24, 160, 376, "LIBRARY", juce::String ((int) filtered.size()) + " PRESETS");
-        canvas.well (24, 172, 376, 172);
-        canvas.fill (26, 174, 372, 168, BLK);
+        sectionBand (24, 168, 376, "LIBRARY", juce::String ((int) filtered.size()) + " PRESETS");
+        canvas.well (24, 180, 376, 148);
+        canvas.fill (26, 182, 372, 144, BLK);
         const int rows = (int) filtered.size();
         scrollRow = juce::jlimit (0, juce::jmax (0, rows - kLibraryRows), scrollRow);
         for (int i = 0; i < kLibraryRows; ++i)
         {
             const int row = scrollRow + i;
-            const int y = 177 + i * 9;
+            const int y = 187 + i * 9;
             if (row >= rows)
                 break;
             const auto& info = filtered[(size_t) row];
@@ -974,18 +1027,20 @@ namespace ambika_plugin
         }
         if (rows > kLibraryRows)
         {
-            const int track = 166;
+            const int track = 142;
             const int barH = juce::jmax (6, track * kLibraryRows / rows);
-            const int barY = 175 + (track - barH) * scrollRow / juce::jmax (1, rows - kLibraryRows);
-            canvas.fill (395, 175, 2, track, D1);
+            const int barY = 183 + (track - barH) * scrollRow / juce::jmax (1, rows - kLibraryRows);
+            canvas.fill (395, 183, 2, track, D1);
             canvas.fill (395, barY, 2, barH, MID);
         }
         {
             Hit h;  // wheel anywhere on the list
-            h.area = { 24, 172, 376, 172 };
+            h.area = { 24, 180, 376, 148 };
             h.onWheel = [this] (int d) { scrollRow -= d * 3; };
             hits.insert (hits.end() - juce::jmin ((int) hits.size(), juce::jmin (kLibraryRows, juce::jmax (0, rows - scrollRow))), h);
         }
+
+        sectionFrame (24, 168, 376, 161);
 
         // Tags.
         sectionBand (408, 120, 208, "TAGS");
@@ -994,7 +1049,7 @@ namespace ambika_plugin
         {
             const auto tag = tags[i];
             const bool on = activeTags.contains (tag, true);
-            button (408 + (i % 4) * 52, 136 + (i / 4) * 20, 48, tag.substring (0, 12), on, [this, tag]
+            button (410 + (i % 4) * 52, 133 + (i / 4) * 20, 48, tag.substring (0, 12), on, [this, tag]
             {
                 if (activeTags.contains (tag, true))
                     activeTags.removeString (tag, true);
@@ -1004,10 +1059,12 @@ namespace ambika_plugin
             }, false);
         }
 
+        sectionFrame (408, 120, 208, 93);
+
         // Details of the selected preset.
-        sectionBand (408, 220, 208, "DETAILS");
-        canvas.well (408, 232, 208, 112);
-        canvas.fill (410, 234, 204, 108, BLK);
+        sectionBand (408, 228, 208, "DETAILS");
+        canvas.well (408, 240, 208, 88);
+        canvas.fill (410, 242, 204, 84, BLK);
         juce::StringArray lines;
         if (const auto* info = selectedPreset())
         {
@@ -1029,33 +1086,37 @@ namespace ambika_plugin
             lines.add ({});
             lines.addArray (wrap ("type to search. tags narrow the list to presets that have them all.", 33));
         }
-        lines.removeRange (11, lines.size());
-        canvas.vfd (413, 237, lines, 33);
+        lines.removeRange (9, lines.size());
+        canvas.vfd (413, 244, lines, 33);
+        sectionFrame (408, 228, 208, 101);
 
         // Actions.
-        sectionBand (24, 352, 376, "PRESET");
+        constexpr int actionY = 344, actionButtonY = actionY + 13;
+        sectionBand (24, actionY, 376, "PRESET");
         const auto* selected = selectedPreset();
-        button (24, 368, 40, "LOAD", false, [this] { loadSelected(); }, false);
-        button (72, 368, 40, "RENAME", false, [this] { openRename(); }, false);
-        button (120, 368, 40, deleteArmed ? "SURE?" : "DELETE", deleteArmed, [this] { deleteSelected(); }, false);
-        button (168, 368, 40, "FOLDER", false, [this]
+        button (26, actionButtonY, 40, "LOAD", false, [this] { loadSelected(); }, false);
+        button (74, actionButtonY, 40, "RENAME", false, [this] { openRename(); }, false);
+        button (122, actionButtonY, 40, deleteArmed ? "SURE?" : "DELETE", deleteArmed, [this] { deleteSelected(); }, false);
+        button (170, actionButtonY, 40, "FOLDER", false, [this]
         {
             auto dir = presets.getDirectory();
             dir.createDirectory();
             dir.revealToUser();
         }, false);
-        button (216, 368, 40, "RESCAN", false, [this]
+        button (218, actionButtonY, 40, "RESCAN", false, [this]
         {
             refreshLibrary();
             notify ("Library rescanned: " + juce::String ((int) library.size()) + " presets");
         }, false);
         if (selected != nullptr && selected->factory)
-            canvas.text3 ("FACTORY: READ ONLY", 264, 374, MID);
+            canvas.text3 ("FACTORY: READ ONLY", 266, actionButtonY + 6, MID);
+        sectionFrame (24, actionY, 376, 33);
 
         // Ambika files.
-        sectionBand (408, 352, 208, "IMPORT AMBIKA FILES");
-        button (408, 368, 96, "TO PART", false, [this] { loadAmbikaFile(); }, false);
-        button (512, 368, 96, "TO LIBRARY", false, [this] { importToLibrary(); }, false);
+        sectionBand (408, actionY, 208, "IMPORT AMBIKA FILES");
+        button (410, actionButtonY, 100, "TO PART", false, [this] { loadAmbikaFile(); }, false);
+        button (514, actionButtonY, 100, "TO LIBRARY", false, [this] { importToLibrary(); }, false);
+        sectionFrame (408, actionY, 208, 33);
     }
 
     //==========================================================================
@@ -1096,12 +1157,11 @@ namespace ambika_plugin
     {
         addHit ({ 0, 0, canvasWidth, canvasHeight }, [] {});  // modal
         const bool rename = dialog == Dialog::Rename;
-        canvas.fill (71, 127, 498, 234, BLK);
+        canvas.fill (71, 127, 498, 233, BLK);
         canvas.well (72, 128, 496, 232);
-        canvas.band (72, 128, 496);
-        canvas.text3 (rename ? juce::String ("RENAME PRESET")
-                             : "SAVE PART " + juce::String (audioProcessor.editedPart() + 1) + " AS PRESET",
-                      76, 130, WH);
+        sectionBand (72, 128, 496, rename ? juce::String ("RENAME PRESET")
+                                          : "SAVE PART " + juce::String (audioProcessor.editedPart() + 1) + " AS PRESET");
+        sectionFrame (72, 128, 496, 232);
 
         textField (160, 148, 392, "NAME", 0);
         if (! rename)
@@ -1210,9 +1270,15 @@ namespace ambika_plugin
         repaint();
     }
 
+    void AmbikaAudioProcessorEditor::setLogoVariant (int variant)
+    {
+        logoVariant = variant;
+        setHeaderStyle (headerStyle);
+    }
+
     void AmbikaAudioProcessorEditor::setHeaderStyle (int style)
     {
-        headerStyle = juce::jlimit (0, 2, style);
+        headerStyle = juce::jlimit (0, 9, style);
         buildPlate();
         render();
         shownPixels = canvas.pixels();
