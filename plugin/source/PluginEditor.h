@@ -47,8 +47,9 @@ namespace ambika_plugin
         int scaled (int canvasPixels) const { return canvasPixels * zoomHalves / 2; }
         // Section header look: see Canvas::headerBand for the styles.
         void setHeaderStyle (int style);
-        // Logo treatment for the red and silver header styles: 0 letters on a
-        // panel in the header colour, 1 letters in the header colour on black.
+        // Logo treatment: 0 letters on a panel in the header colour (red and silver
+        // styles), 1 letters in the header colour on black, 2 white letters on
+        // black, 3 silver letters on black (the default).
         void setLogoVariant (int variant);
         // Touches a control as if it had been clicked (the display follows it);
         // engine id for part parameters, host id otherwise.
@@ -152,7 +153,7 @@ namespace ambika_plugin
         juce::Image image;
         int zoomHalves = 4;
         int headerStyle = 5;
-        int logoVariant = 1;
+        int logoVariant = 3;
         int page = 0;
         int matrixPage = 0;
         int selectedSlot = 0;

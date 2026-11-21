@@ -253,15 +253,15 @@ int main (int argc, char** argv)
             g.setFont (16.0f);
             g.setColour (juce::Colours::white);
             editor->setHeaderStyle (5);
-            editor->setLogoVariant (2);
-            g.drawText ("Dark red headers.  Logo C: white letters on black", 8, 0, w - 16, labelH, juce::Justification::centredLeft);
+            editor->setLogoVariant (3);
+            g.drawText ("Dark red headers.  Logo D: silver letters on black (default)", 8, 0, w - 16, labelH, juce::Justification::centredLeft);
             g.drawImageAt (editor->renderCanvas().toImage (4), 0, labelH);
-            editor->setLogoVariant (1);
-            g.drawText ("Logo B: red letters on black (current)", 8, labelH + pageH, w - 16, labelH, juce::Justification::centredLeft);
+            editor->setLogoVariant (2);
+            g.drawText ("Logo C: white letters on black", 8, labelH + pageH, w - 16, labelH, juce::Justification::centredLeft);
             g.drawImage (editor->renderCanvas().toImage (4), 0, labelH + pageH + labelH, w, stripH, 0, 0, w, stripH);
-            writePng (out, optionsDir.getChildFile ("mock-logo-white.png"));
+            writePng (out, optionsDir.getChildFile ("mock-logo-silver.png"));
         }
-        editor->setLogoVariant (1);
+        editor->setLogoVariant (3);
     }
     editor->setHeaderStyle (5);
 

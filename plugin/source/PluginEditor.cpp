@@ -163,7 +163,7 @@ namespace ambika_plugin
                                 : headerStyle == 9 ? Canvas::ramp ({ LED_ON, LED_ON, LED_OFF }, f, xx, yy)
                                                    : Canvas::ramp ({ LED_OFF, LED_OFF, LED_OFF, BLK }, f, xx, yy));
                     }
-            c.logo (32, 25, 2, logoVariant == 2 ? 2 : red ? (logoVariant == 0 ? 2 : 3) : silver && logoVariant == 0 ? 1 : 0);
+            c.logo (32, 25, 2, logoVariant == 3 ? 0 : logoVariant == 2 ? 2 : red ? (logoVariant == 0 ? 2 : 3) : silver && logoVariant == 0 ? 1 : 0);
         }
         c.well (136, 16, 256, 40);
         c.fill (140, 20, 248, 32, BLK);
