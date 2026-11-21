@@ -166,12 +166,24 @@ set_source_files_properties("${AMBIKA_ROOT}/voicecard/resources.cc" PROPERTIES
 # Upstream firmware sources are compiled as-is; their warnings are not ours.
 # The generated tables store negative literals in uint8_t arrays, which
 # avr-gcc wraps silently; allow the same wrapping here.
-set_source_files_properties(${AMBIKA_UPSTREAM_SOURCES} PROPERTIES
-	COMPILE_OPTIONS "-w;-Wno-c++11-narrowing")
+if(MSVC)
+	set_source_files_properties(${AMBIKA_UPSTREAM_SOURCES} PROPERTIES
+		COMPILE_OPTIONS "/w")
+else()
+	set_source_files_properties(${AMBIKA_UPSTREAM_SOURCES} PROPERTIES
+		COMPILE_OPTIONS "-w;-Wno-c++11-narrowing")
+endif()
 # common/patch.h uses PROGMEM without including <avr/pgmspace.h> (on the AVR it
 # always arrives through an earlier include). Make it available everywhere.
-target_compile_options(ambika_engine PUBLIC
-	"SHELL:-include \"${CMAKE_CURRENT_SOURCE_DIR}/engine/shim/avr/pgmspace.h\"")
+if(MSVC)
+	target_compile_options(ambika_engine PUBLIC
+		"/FI${CMAKE_CURRENT_SOURCE_DIR}/engine/shim/avr/pgmspace.h"
+		/utf-8 /bigobj /Zc:__cplusplus /Zc:preprocessor)
+	target_compile_definitions(ambika_engine PUBLIC NOMINMAX _USE_MATH_DEFINES)
+else()
+	target_compile_options(ambika_engine PUBLIC
+		"SHELL:-include \"${CMAKE_CURRENT_SOURCE_DIR}/engine/shim/avr/pgmspace.h\"")
+endif()
 
 # --- Tests -------------------------------------------------------------------
 include(CTest)
@@ -224,25 +236,6 @@ if(AMBIKA_BUILD_PLUGIN)
 		endforeach()
 	endif()
 
-	# Built-in skin: any images / skin.json in plugin/skin/ are compiled in.
-	file(GLOB AMBIKA_SKIN_FILES CONFIGURE_DEPENDS
-		"${CMAKE_CURRENT_SOURCE_DIR}/skin/*.png" "${CMAKE_CURRENT_SOURCE_DIR}/skin/*.json")
-	if(AMBIKA_SKIN_FILES)
-		juce_add_binary_data(EurekaSkinData HEADER_NAME EurekaSkinData.h NAMESPACE EurekaSkinData
-			SOURCES ${AMBIKA_SKIN_FILES})
-		target_link_libraries(AmbikaPlugin PRIVATE EurekaSkinData)
-		target_compile_definitions(AmbikaPlugin PRIVATE EUREKA_HAS_BUILTIN_SKIN=1)
-		message(STATUS "eureka!: built-in skin from plugin/skin (${AMBIKA_SKIN_FILES})")
-	endif()
-
-	# UI font (Bageo by 160 Studio). Check its licence allows embedding before
-	# distributing builds.
-	juce_add_binary_data(EurekaFonts HEADER_NAME EurekaFonts.h NAMESPACE EurekaFonts
-		SOURCES
-			"${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/Bageo.ttf"
-			"${CMAKE_CURRENT_SOURCE_DIR}/resources/images/eureka-logo.jpg")
-	target_link_libraries(AmbikaPlugin PRIVATE EurekaFonts)
-
 	# The Ambika factory programs (controller/data/programs), compiled in.
 	file(GLOB AMBIKA_FACTORY_PROGRAMS CONFIGURE_DEPENDS "${AMBIKA_ROOT}/controller/data/programs/*.PRO")
 	juce_add_binary_data(EurekaFactory HEADER_NAME EurekaFactory.h NAMESPACE EurekaFactory
@@ -252,18 +245,12 @@ if(AMBIKA_BUILD_PLUGIN)
 	target_sources(AmbikaPlugin PRIVATE
 		source/AmbikaImport.cpp
 		source/AmbikaImport.h
-		source/Controls.cpp
-		source/Controls.h
-		source/EurekaLookAndFeel.cpp
-		source/EurekaLookAndFeel.h
+		source/PixelGfx.cpp
+		source/PixelGfx.h
 		source/PluginParameters.cpp
 		source/PluginParameters.h
-		source/PresetBrowser.cpp
-		source/PresetBrowser.h
 		source/PresetManager.cpp
 		source/PresetManager.h
-		source/Skin.cpp
-		source/Skin.h
 		source/PluginEditor.cpp
 		source/PluginEditor.h
 		source/PluginProcessor.cpp
@@ -306,14 +293,11 @@ if(AMBIKA_BUILD_PLUGIN)
 		target_sources(ambika_preset_test PRIVATE
 			tests/preset_test.cpp
 			source/AmbikaImport.cpp
-			source/Controls.cpp
-			source/EurekaLookAndFeel.cpp
+			source/PixelGfx.cpp
 			source/PluginEditor.cpp
 			source/PluginParameters.cpp
 			source/PluginProcessor.cpp
-			source/PresetBrowser.cpp
-			source/PresetManager.cpp
-			source/Skin.cpp)
+			source/PresetManager.cpp)
 		target_include_directories(ambika_preset_test PRIVATE source)
 		target_compile_definitions(ambika_preset_test PRIVATE
 			AMBIKA_PROGRAMS_DIR="${AMBIKA_ROOT}/controller/data/programs")
@@ -322,7 +306,6 @@ if(AMBIKA_BUILD_PLUGIN)
 			JUCE_WEB_BROWSER=0
 			JUCE_USE_CURL=0)
 		target_link_libraries(ambika_preset_test PRIVATE
-			EurekaFonts
 			EurekaFactory
 			ambika_engine
 			juce::juce_audio_utils
@@ -334,14 +317,11 @@ if(AMBIKA_BUILD_PLUGIN)
 		target_sources(ambika_editor_snapshot PRIVATE
 			tests/editor_snapshot.cpp
 			source/AmbikaImport.cpp
-			source/Controls.cpp
-			source/EurekaLookAndFeel.cpp
+			source/PixelGfx.cpp
 			source/PluginParameters.cpp
-			source/PresetBrowser.cpp
 			source/PresetManager.cpp
 			source/PluginEditor.cpp
-			source/PluginProcessor.cpp
-			source/Skin.cpp)
+			source/PluginProcessor.cpp)
 		target_include_directories(ambika_editor_snapshot PRIVATE source)
 		target_compile_definitions(ambika_editor_snapshot PRIVATE
 			JucePlugin_Name="${AMBIKA_PLUGIN_NAME}"
@@ -349,7 +329,6 @@ if(AMBIKA_BUILD_PLUGIN)
 			JUCE_WEB_BROWSER=0
 			JUCE_USE_CURL=0)
 		target_link_libraries(ambika_editor_snapshot PRIVATE
-			EurekaFonts
 			EurekaFactory
 			ambika_engine
 			juce::juce_audio_utils

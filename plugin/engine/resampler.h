@@ -25,12 +25,17 @@ class Resampler {
   // Output side: true if Pop() can produce a sample without more input.
   bool CanPop() const;
   float Pop();
+  // Pops this resampler and `other` together. Both must have been set up and
+  // fed identically except for the samples (the two channels of a stereo
+  // signal); the kernel is then evaluated once for both.
+  void PopStereo(Resampler& other, float* out, float* other_out);
 
   // Input samples between the newest input and the next output (latency).
   int latency_in_input_samples() const { return half_width_; }
 
  private:
   float Kernel(double t) const;
+  void Advance();
 
   static const int kZeroCrossings = 16;
   static const int kTableResolution = 256;  // Points per input sample.

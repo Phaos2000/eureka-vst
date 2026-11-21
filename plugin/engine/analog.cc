@@ -51,6 +51,7 @@ void AnalogVoice::Reset() {
   dc_x_ = dc_y_ = 0.0f;
   surge_.Reset();
   last_model_ = 0;
+  coefficient_cutoff_cv_ = coefficient_resonance_cv_ = -1.0f;
 }
 
 double AnalogVoice::CutoffToHz(double cutoff_cv) {
@@ -92,11 +93,18 @@ void AnalogVoice::Process(const uint8_t* samples, int num_samples,
     resonance_cv_ += cv_coefficient_ * (resonance_target - resonance_cv_);
     vca_cv_ += vca_coefficient_ * (vca_target - vca_cv_);
 
-    const double fc = std::min(CutoffToHz(cutoff_cv_), max_cutoff);
-    const float g = static_cast<float>(std::tan(kPi * fc / sample_rate_));
-    const float r = resonance_cv_ * (1.0f / 255.0f);
-    const float k = 1.41f - 1.39f * r;
-    const float denominator = 1.0f / (1.0f + g * (k + g));
+    if (cutoff_cv_ != coefficient_cutoff_cv_ || resonance_cv_ != coefficient_resonance_cv_) {
+      coefficient_cutoff_cv_ = cutoff_cv_;
+      coefficient_resonance_cv_ = resonance_cv_;
+      const double fc = std::min(CutoffToHz(cutoff_cv_), max_cutoff);
+      g_ = static_cast<float>(std::tan(kPi * fc / sample_rate_));
+      const float r = resonance_cv_ * (1.0f / 255.0f);
+      k_ = 1.41f - 1.39f * r;
+      denominator_ = 1.0f / (1.0f + g_ * (k_ + g_));
+    }
+    const float g = g_;
+    const float k = k_;
+    const float denominator = denominator_;
     const float gain = vca_cv_ * (1.0f / 255.0f);
 
     for (int j = 0; j < oversampling_; ++j) {

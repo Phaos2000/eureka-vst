@@ -11,11 +11,40 @@ namespace ambika_plugin
         constexpr int kStateVersion = 3;  // 2: multi-part, 3: preset names.
     }
 
+    namespace
+    {
+        std::unique_ptr<juce::PropertiesFile> openUserSettings()
+        {
+            juce::PropertiesFile::Options options;
+            options.storageFormat = juce::PropertiesFile::storeAsXML;
+            options.millisecondsBeforeSaving = 0; // write as soon as a value changes
+            return std::make_unique<juce::PropertiesFile> (AmbikaAudioProcessor::userSettingsFile(), options);
+        }
+    }
+
+    juce::File& AmbikaAudioProcessor::userSettingsFile()
+    {
+        static juce::File file = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                                     .getChildFile ("eureka")
+                                     .getChildFile ("eureka.settings");
+        return file;
+    }
+
+    void AmbikaAudioProcessor::setEditorZoomHalves (int halves)
+    {
+        halves = juce::jlimit (2, 6, halves);
+        if (editorZoomFactor.exchange (halves) == halves)
+            return;
+        userSettingsFile().getParentDirectory().createDirectory();
+        openUserSettings()->setValue ("editorZoomHalves", halves);
+    }
+
     AmbikaAudioProcessor::AmbikaAudioProcessor()
         : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
           state (*this, nullptr, "AmbikaState", createParameterLayout()),
           engine (std::make_unique<ambika::plugin::Engine>())
     {
+        editorZoomFactor = juce::jlimit (2, 6, openUserSettings()->getIntValue ("editorZoomHalves", 4));
         const int count = ambika::plugin::NumParameters();
         for (int part = 0; part < kNumParts; ++part)
         {
@@ -240,6 +269,10 @@ namespace ambika_plugin
             {
                 auto tree = juce::ValueTree::fromXml (*xml);
                 setEditedPart (tree.getProperty ("editedPart", 0));
+                // Older states also carry "editorZoomHalves" / "editorZoom"; the zoom
+                // is a per-user setting now, so a song never changes it.
+                tree.removeProperty ("editorZoomHalves", nullptr);
+                tree.removeProperty ("editorZoom", nullptr);
                 // Version 1 states have no multi parameters; replaceState leaves
                 // them at their defaults (part 1, all voices, all channels).
                 state.replaceState (tree);

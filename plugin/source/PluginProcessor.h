@@ -53,6 +53,14 @@ namespace ambika_plugin
         // The part shown in the editor; saved with the project.
         int editedPart() const { return editedPartIndex.load(); }
         void setEditedPart (int part) { editedPartIndex = juce::jlimit (0, kNumParts - 1, part); }
+        // Editor pixel zoom in half steps (2 = 1x, 3 = 1.5x, 4 = 2x, 6 = 3x). A
+        // per-user setting, not part of the song: the last size picked is saved
+        // to userSettingsFile() and every new instance opens at it.
+        int editorZoomHalves() const { return editorZoomFactor.load(); }
+        void setEditorZoomHalves (int halves);
+
+        // %APPDATA%\eureka\eureka.settings (macOS ~/Library/eureka); tests point it elsewhere.
+        static juce::File& userSettingsFile();
 
     private:
         void applyParameters();
@@ -80,6 +88,7 @@ namespace ambika_plugin
         std::array<std::atomic<uint8_t>, kNumVoices> voiceLevels {};
         std::array<std::atomic<uint8_t>, kNumVoices> voiceOwners {};
         std::atomic<int> editedPartIndex { 0 };
+        std::atomic<int> editorZoomFactor { 4 };
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AmbikaAudioProcessor)
     };

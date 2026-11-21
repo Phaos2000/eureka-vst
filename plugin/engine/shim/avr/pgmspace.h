@@ -12,6 +12,11 @@
 
 #define PROGMEM
 
+// MSVC has no GCC attribute syntax; the firmware only uses always_inline.
+#if defined(_MSC_VER) && !defined(__clang__) && !defined(__attribute__)
+#define __attribute__(x)
+#endif
+
 typedef char prog_char;
 typedef int8_t prog_int8_t;
 typedef uint8_t prog_uint8_t;
