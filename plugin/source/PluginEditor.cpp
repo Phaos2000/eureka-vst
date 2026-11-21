@@ -510,7 +510,7 @@ namespace ambika_plugin
 
         // Pages.
         {
-            const juce::StringArray labels { "SYNTH", "MOD", "MULTI", "PRESETS" };
+            const juce::StringArray labels { "SYNTH", "MOD", "MULTI", "PRESET" };
             const auto xs = buttonRow (168, 152, labels);
             for (int i = 0; i < 4; ++i)
                 button (xs[(size_t) i].getStart(), by, xs[(size_t) i].getLength(), labels[i], i == page, [this, i] { showPage (i); });
@@ -520,13 +520,13 @@ namespace ambika_plugin
 
         // Program.
         {
-            const auto xs = buttonRow (326, 154, { "<", ">", "SAVE", "SAVE AS", "INIT" });
+            const auto xs = buttonRow (326, 154, { "<", ">", "SAVE", "SAVE...", "INIT" });
             auto at = [&] (int i) { return xs[(size_t) i].getStart(); };
             auto wd = [&] (int i) { return xs[(size_t) i].getLength(); };
             button (at (0), by, wd (0), "<", false, [this] { stepPreset (-1); }, false);
             button (at (1), by, wd (1), ">", false, [this] { stepPreset (1); }, false);
             button (at (2), by, wd (2), "SAVE", false, [this] { quickSave(); }, false);
-            button (at (3), by, wd (3), "SAVE AS", false, [this] { showSaveDialog(); }, false);
+            button (at (3), by, wd (3), "SAVE...", false, [this] { showSaveDialog(); }, false);
             button (at (4), by, wd (4), "INIT", dialog == Dialog::Init, [this] { dialog = Dialog::Init; }, false);
         }
         sectionBand (326, bandY, 154, "PROGRAM");
@@ -652,15 +652,15 @@ namespace ambika_plugin
                    { range.toRawUTF8(), "RANGE", "rang" }, { tune.toRawUTF8(), "TUNE", "tune" } });
         }
         row (326, 0, "MIXER", "mixer",
-             { { "mix_balance", "BALANCE", "bal" }, { "mix_operator", "XMOD", "xmod" }, { "mix_amount", "AMOUNT", "amt" },
-               { "mix_sub_shape", "SUB", "sub" }, { "mix_sub_level", "SUB LVL", "slvl" }, { "mix_noise", "NOISE", "nois" },
+             { { "mix_balance", "BAL", "bal" }, { "mix_operator", "XMOD", "xmod" }, { "mix_amount", "AMOUNT", "amt" },
+               { "mix_sub_shape", "SUB", "sub" }, { "mix_sub_level", "SUB LV", "slvl" }, { "mix_noise", "NOISE", "nois" },
                { "mix_fuzz", "FUZZ", "fuzz" }, { "mix_crush", "CRUSH", "crsh" } });
 
         const int model = engineValue ("filter_model");
         const int variants = model > 0 ? ambika::plugin::SurgeFilter::NumSubtypes (model) : 0;
         row (kLeft, 1, "FILTER", "filter",
              { { "filter_cutoff", "CUTOFF", "cut" }, { "filter_resonance", "RESO", "res" }, { "filter_mode", "MODE", "mode" },
-               { "filter_model", "MODEL", "modl" }, { "filter_variant", "VARIANT", "var" }, { "filter_env", "ENV 2", "env2" },
+               { "filter_model", "MODEL", "modl" }, { "filter_variant", "VAR", "var" }, { "filter_env", "ENV 2", "env2" },
                { "filter_lfo", "LFO 2", "lfo2" } },
              [&] (const juce::String& id)
              {
@@ -681,8 +681,8 @@ namespace ambika_plugin
             const int x = e == 2 ? kLeft : 282;
             const int r = e == 1 ? 1 : 2;
             row (x, r, "ENVELOPE " + n + " + LFO " + n, "env/lfo " + n,
-                 { { ids[0].toRawUTF8(), "ATTACK", "atk" }, { ids[1].toRawUTF8(), "DECAY", "dec" },
-                   { ids[2].toRawUTF8(), "SUSTAIN", "sus" }, { ids[3].toRawUTF8(), "RELEASE", "rel" },
+                 { { ids[0].toRawUTF8(), "ATK", "atk" }, { ids[1].toRawUTF8(), "DEC", "dec" },
+                   { ids[2].toRawUTF8(), "SUS", "sus" }, { ids[3].toRawUTF8(), "REL", "rel" },
                    { ids[4].toRawUTF8(), "SHAPE", "shap" }, { ids[5].toRawUTF8(), "RATE", "rate" },
                    { ids[6].toRawUTF8(), "SYNC", "sync" } });
         }
@@ -695,8 +695,8 @@ namespace ambika_plugin
         canvas.fill (560, kRowY[2] + 47, 64, 1, D3);
 
         row (kLeft, 3, "PART", "part",
-             { { "part_polyphony", "VOICING", "voic" }, { "part_legato", "LEGATO", "lega" }, { "part_volume", "VOLUME", "vol" },
-               { "part_pan", "PAN", "pan" }, { "part_portamento", "GLIDE", "glid" }, { "part_octave", "OCTAVE", "oct" },
+             { { "part_polyphony", "VOICE", "voic" }, { "part_legato", "LEG", "lega" }, { "part_volume", "VOLUME", "vol" },
+               { "part_pan", "PAN", "pan" }, { "part_portamento", "GLIDE", "glid" }, { "part_octave", "OCT", "oct" },
                { "part_tuning", "TUNE", "tune" }, { "part_spread", "SPREAD", "sprd" } });
 
         // Scope: the waveform, curve or response of the section being edited.

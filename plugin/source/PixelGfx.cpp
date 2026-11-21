@@ -250,7 +250,7 @@ namespace ambika_plugin::pixel
                 for (int b = 0; b < g.width; ++b)
                     if ((g.rows[(size_t) i] >> b) & 1)
                         put (x + b, y + i, ink);
-            x += g.width + 1;
+            x += g.width + 2;
         }
     }
 
@@ -258,8 +258,8 @@ namespace ambika_plugin::pixel
     {
         int width = 0;
         for (auto c : s)
-            width += glyph7 (c).width + 1;
-        return std::max (0, width - 1);
+            width += glyph7 (c).width + 2;
+        return std::max (0, width - 2);
     }
 
     void Canvas::vfd (int x, int y, const juce::String& line0, const juce::String& line1, int columns, int k)
@@ -435,10 +435,15 @@ namespace ambika_plugin::pixel
             return d > (r - 1) * (r - 1) ? (int) BLK : ramp ({ BLK, D1, D2, D3, MID }, 0.42 - (dx + dy) / (2.6 * r), cx + dx, cy + dy);
         });
         const double capScale = 15.0 * capR / 7.0;
-        circle (cx, cy, capR, [&] (int dx, int dy, int d)
+        // Cap: a symmetric pixel disc (radius capR + 0.5) with a 1px dark rim, so it
+        // reads as a round circle in the middle of the knob.
+        const double capIn = (capR - 0.5) * (capR - 0.5), capOut = (capR + 0.5) * (capR + 0.5);
+        circle (cx, cy, capR + 1, [&] (int dx, int dy, int d)
         {
-            if (d > (capR - 1) * (capR - 1))
-                return (int) D3;
+            if (d > capOut)
+                return -1;
+            if (d > capIn)
+                return (int) BLK;
             return enabled ? ramp ({ D3, MID, LT, WH }, 0.5 - (dx + dy) / capScale, cx + dx, cy + dy)
                            : ramp ({ D2, D3, MID }, 0.5 - (dx + dy) / capScale, cx + dx, cy + dy);
         });
