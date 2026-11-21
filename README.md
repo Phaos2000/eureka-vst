@@ -3,6 +3,14 @@
 **A six-part hybrid polysynth plug-in by Tootable Instruments, built on the
 Mutable Instruments Ambika.**
 
+![eureka! pixel faceplate GUI](docs/images/screenshot-pixel-synth.png)
+
+*This branch (`pixel-gui`) adds an optional pixel faceplate interface: a 640x400
+bitmap panel in a strict 16-colour palette, zoomable 1x / 1.5x / 2x / 3x. More
+pages: [mod matrix](docs/images/screenshot-pixel-mod-1-8.png),
+[multi](docs/images/screenshot-pixel-multi.png),
+[presets](docs/images/screenshot-pixel-presets.png).*
+
 eureka! runs the original Ambika voicecard firmware natively on your
 computer. It adds a model of the analog filter and VCA, a choice of Surge XT
 filters, stereo panning and a modern interface. It comes as VST3, AU and a
