@@ -53,9 +53,14 @@ namespace ambika_plugin
         // The part shown in the editor; saved with the project.
         int editedPart() const { return editedPartIndex.load(); }
         void setEditedPart (int part) { editedPartIndex = juce::jlimit (0, kNumParts - 1, part); }
-        // Editor pixel zoom in half steps (2 = 1x, 3 = 1.5x, 4 = 2x, 6 = 3x); saved with the project.
+        // Editor pixel zoom in half steps (2 = 1x, 3 = 1.5x, 4 = 2x, 6 = 3x). A
+        // per-user setting, not part of the song: the last size picked is saved
+        // to userSettingsFile() and every new instance opens at it.
         int editorZoomHalves() const { return editorZoomFactor.load(); }
-        void setEditorZoomHalves (int halves) { editorZoomFactor = juce::jlimit (2, 6, halves); }
+        void setEditorZoomHalves (int halves);
+
+        // %APPDATA%\eureka\eureka.settings (macOS ~/Library/eureka); tests point it elsewhere.
+        static juce::File& userSettingsFile();
 
     private:
         void applyParameters();

@@ -73,6 +73,10 @@ int main (int argc, char** argv)
     const juce::File dir { juce::String (argv[1]) };
     dir.createDirectory();
 
+    // Never touch the user's real settings (the zoom is remembered there).
+    const auto settingsFile = juce::File::createTempFile ("eureka-snapshot.settings");
+    ambika_plugin::AmbikaAudioProcessor::userSettingsFile() = settingsFile;
+
     ambika_plugin::AmbikaAudioProcessor processor;
     // Never touch the user's real preset folder.
     const auto presetDir = juce::File::createTempFile ("eureka-snapshot-presets");
@@ -282,9 +286,33 @@ int main (int argc, char** argv)
         std::printf ("zoom 1.5x did not resize the editor\n");
         ++failures;
     }
+
+    // The last size picked is remembered for new instances, and a song cannot change it.
+    {
+        ambika_plugin::AmbikaAudioProcessor second;
+        juce::MemoryBlock song;
+        processor.getStateInformation (song);
+        second.setEditorZoomHalves (6);
+        second.setStateInformation (song.getData(), (int) song.getSize());
+        if (second.editorZoomHalves() != 6)
+        {
+            std::printf ("loading a song changed the zoom\n");
+            ++failures;
+        }
+        second.setEditorZoomHalves (3);
+    }
+    {
+        ambika_plugin::AmbikaAudioProcessor third;
+        if (third.editorZoomHalves() != 3)
+        {
+            std::printf ("a new instance did not open at the last zoom (got %d)\n", third.editorZoomHalves());
+            ++failures;
+        }
+    }
     editor->setZoom (4);
 
     presetDir.deleteRecursively();
+    settingsFile.deleteFile();
     processor.editorBeingDeleted (editor.get());
     editor.reset();
     return failures == 0 ? 0 : 1;
