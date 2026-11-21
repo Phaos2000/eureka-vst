@@ -382,6 +382,24 @@ namespace ambika_plugin::pixel
         if (! image.isValid() || image.getWidth() != outW || image.getHeight() != outH
             || image.getFormat() != juce::Image::ARGB)
             image = juce::Image (juce::Image::ARGB, outW, outH, false, juce::SoftwareImageType());
+        toImage (image, zoomHalves, { 0, 0, w, h });
+    }
+
+    juce::Rectangle<int> Canvas::outputArea (juce::Rectangle<int> area, int zoomHalves)
+    {
+        zoomHalves = std::max (2, zoomHalves);
+        // Output pixel x shows source pixel x * 2 / zoomHalves.
+        const int x0 = area.getX() * zoomHalves / 2, y0 = area.getY() * zoomHalves / 2;
+        const int x1 = (area.getRight() * zoomHalves + 1) / 2, y1 = (area.getBottom() * zoomHalves + 1) / 2;
+        return { x0, y0, x1 - x0, y1 - y0 };
+    }
+
+    void Canvas::toImage (juce::Image& image, int zoomHalves, juce::Rectangle<int> area) const
+    {
+        zoomHalves = std::max (2, zoomHalves);
+        const auto out = outputArea (area, zoomHalves).getIntersection ({ 0, 0, image.getWidth(), image.getHeight() });
+        if (out.isEmpty())
+            return;
 
         std::array<juce::PixelARGB, kNumInks> colours;
         for (int i = 0; i < kNumInks; ++i)
@@ -390,15 +408,16 @@ namespace ambika_plugin::pixel
             colours[(size_t) i].setARGB (0xff, (juce::uint8) (c >> 16), (juce::uint8) (c >> 8), (juce::uint8) c);
         }
         // Nearest neighbour; at 1.5x every other source pixel is two output pixels wide.
-        std::vector<int> sourceX ((size_t) outW);
-        for (int x = 0; x < outW; ++x)
-            sourceX[(size_t) x] = x * 2 / zoomHalves;
-        juce::Image::BitmapData data (image, juce::Image::BitmapData::writeOnly);
-        for (int y = 0; y < outH; ++y)
+        std::vector<int> sourceX ((size_t) out.getWidth());
+        for (int x = 0; x < out.getWidth(); ++x)
+            sourceX[(size_t) x] = (out.getX() + x) * 2 / zoomHalves;
+        juce::Image::BitmapData data (image, out.getX(), out.getY(), out.getWidth(), out.getHeight(),
+                                      juce::Image::BitmapData::writeOnly);
+        for (int y = 0; y < out.getHeight(); ++y)
         {
             auto* dest = data.getLinePointer (y);
-            const auto* row = &px[(size_t) ((y * 2 / zoomHalves) * w)];
-            for (int x = 0; x < outW; ++x)
+            const auto* row = &px[(size_t) (((out.getY() + y) * 2 / zoomHalves) * w)];
+            for (int x = 0; x < out.getWidth(); ++x)
             {
                 *reinterpret_cast<juce::PixelARGB*> (dest) = colours[row[sourceX[(size_t) x]]];
                 dest += data.pixelStride;

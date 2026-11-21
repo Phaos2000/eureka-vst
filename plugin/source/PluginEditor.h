@@ -16,10 +16,12 @@ namespace ambika_plugin
 {
     // The hardware faceplate: everything is drawn pixel by pixel into a
     // 640x400 canvas of 16 colours (PixelGfx) and shown at 1x, 2x or 3x with
-    // nearest-neighbour scaling. Knobs drag vertically; the character display
+    // nearest-neighbour scaling. Knobs drag vertically and modulation matrix rows
+    // sideways (along their amount bar); the character display
     // shows the section being edited, as the firmware's editor does.
     class AmbikaAudioProcessorEditor final : public juce::AudioProcessorEditor,
-                                             private juce::Timer
+                                             private juce::Timer,
+                                             private juce::AsyncUpdater
     {
     public:
         explicit AmbikaAudioProcessorEditor (AmbikaAudioProcessor&);
@@ -66,6 +68,7 @@ namespace ambika_plugin
             juce::String label, shortName, longName, section;
             int maxIndex = -1;  // limits the range (filter variants)
             bool enabled = true;
+            bool horizontal = false;  // drags sideways (modulation matrix rows)
         };
 
         // A clickable area: a knob, or anything with a click handler.
@@ -81,6 +84,7 @@ namespace ambika_plugin
         enum class Dialog { None, Save, Rename, Init };
 
         void timerCallback() override;
+        void handleAsyncUpdate() override;
         void refresh();
         void render();
         void renderOnce();
@@ -170,6 +174,7 @@ namespace ambika_plugin
         Knob dragKnob;
         int dragStartIndex = 0;
         int dragStartY = 0;
+        int dragStartX = 0;
 
         // Message in the program window for a moment.
         juce::String toast;

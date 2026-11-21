@@ -106,6 +106,11 @@ namespace ambika_plugin::pixel
         // zoomHalves is the zoom in half steps: 2 = 1x, 3 = 1.5x, 4 = 2x, 6 = 3x.
         juce::Image toImage (int zoomHalves) const;
         void toImage (juce::Image& image, int zoomHalves) const;
+        // Converts only the output pixels showing canvas area `area`; the image must
+        // already have the zoomed size.
+        void toImage (juce::Image& image, int zoomHalves, juce::Rectangle<int> area) const;
+        // The output pixels that show canvas area `area` at this zoom.
+        static juce::Rectangle<int> outputArea (juce::Rectangle<int> area, int zoomHalves);
 
     private:
         int w, h;

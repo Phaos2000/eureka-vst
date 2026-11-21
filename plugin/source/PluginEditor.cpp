@@ -1,5 +1,7 @@
 #include "PluginEditor.h"
 
+#include <cstring>
+
 #include <cmath>
 
 #include "AmbikaImport.h"
@@ -66,6 +68,7 @@ namespace ambika_plugin
     AmbikaAudioProcessorEditor::~AmbikaAudioProcessorEditor()
     {
         stopTimer();
+        cancelPendingUpdate();
         if (dragParam != nullptr)
             dragParam->endChangeGesture();
     }
@@ -82,15 +85,48 @@ namespace ambika_plugin
         refresh();
     }
 
+    void AmbikaAudioProcessorEditor::handleAsyncUpdate()
+    {
+        refresh();
+    }
+
     void AmbikaAudioProcessorEditor::refresh()
     {
         render();
-        if (canvas.pixels() != shownPixels || image.getWidth() != scaled (canvasWidth))
+        const auto& px = canvas.pixels();
+        if (image.getWidth() != scaled (canvasWidth) || shownPixels.size() != px.size())
         {
-            shownPixels = canvas.pixels();
+            shownPixels = px;
             canvas.toImage (image, zoomHalves);
             repaint();
+            return;
         }
+        // Convert and repaint only the rectangle that changed.
+        int minX = canvasWidth, maxX = -1, minY = canvasHeight, maxY = -1;
+        for (int y = 0; y < canvasHeight; ++y)
+        {
+            const auto* a = px.data() + (size_t) y * canvasWidth;
+            const auto* b = shownPixels.data() + (size_t) y * canvasWidth;
+            if (std::memcmp (a, b, canvasWidth) == 0)
+                continue;
+            int x0 = 0, x1 = canvasWidth - 1;
+            while (a[x0] == b[x0])
+                ++x0;
+            while (a[x1] == b[x1])
+                --x1;
+            minX = std::min (minX, x0);
+            maxX = std::max (maxX, x1);
+            minY = std::min (minY, y);
+            maxY = y;
+        }
+        if (maxY < 0)
+            return;
+        const juce::Rectangle<int> area (minX, minY, maxX - minX + 1, maxY - minY + 1);
+        for (int y = minY; y <= maxY; ++y)
+            std::memcpy (shownPixels.data() + (size_t) y * canvasWidth + minX, px.data() + (size_t) y * canvasWidth + minX,
+                         (size_t) area.getWidth());
+        canvas.toImage (image, zoomHalves, area);
+        repaint (pixel::Canvas::outputArea (area, zoomHalves));
     }
 
     const Canvas& AmbikaAudioProcessorEditor::renderCanvas()
@@ -794,6 +830,7 @@ namespace ambika_plugin
             k.param = amount;
             k.shortName = "amt";
             k.longName = "mod " + n + " amount";
+            k.horizontal = true;
             knobs.push_back (k);
             Hit h;
             h.area = { 29, y - 2, 582, 12 };
@@ -1335,6 +1372,7 @@ namespace ambika_plugin
                 dragParam = k.param;
                 dragStartIndex = indexOf (k);
                 dragStartY = e.y;
+                dragStartX = e.x;
                 dragParam->beginChangeGesture();
             }
         }
@@ -1347,16 +1385,21 @@ namespace ambika_plugin
     {
         if (dragParam == nullptr)
             return;
-        double pixelsPerStep = juce::jlimit (1.5, 12.0, 200.0 / stepCount (dragKnob));
+        // Knobs: up raises. Matrix rows: right raises, and the bar follows the mouse
+        // (one bar segment, 6 canvas pixels, is about 4 steps).
+        double pixelsPerStep = dragKnob.horizontal ? 1.5 * zoomHalves / 2.0
+                                                   : juce::jlimit (1.5, 12.0, 200.0 / stepCount (dragKnob));
         if (e.mods.isShiftDown())
             pixelsPerStep *= 4.0;
-        const int index = dragStartIndex + (int) std::floor ((dragStartY - e.y) / pixelsPerStep + 0.5);
+        const int moved = dragKnob.horizontal ? e.x - dragStartX : dragStartY - e.y;
+        const int index = dragStartIndex + (int) std::floor (moved / pixelsPerStep + 0.5);
         if (juce::jlimit (0, stepCount (dragKnob) - 1, index) != indexOf (dragKnob))
         {
             setIndex (dragKnob, index);
             edited();
+            // Redraw once the queued mouse moves are handled, not once per move.
+            triggerAsyncUpdate();
         }
-        refresh();
     }
 
     void AmbikaAudioProcessorEditor::mouseUp (const juce::MouseEvent&)
