@@ -232,12 +232,18 @@ namespace ambika_plugin::pixel
 
     void Canvas::plate()
     {
+        // Spun metal: grain in rings around the centre (squashed a little
+        // vertically to suit the wide panel), catching the light in a soft
+        // cross, over the top-to-bottom shading.
         for (int y = 0; y < h; ++y)
-        {
-            const double f = 0.55 - 0.45 * y / h + 0.08 * (hash (y) - 0.5);
             for (int x = 0; x < w; ++x)
+            {
+                const double dx = x - w * 0.5, dy = (y - h * 0.5) * 1.2;
+                const double ring = hash (std::floor (std::sqrt (dx * dx + dy * dy)));
+                const double sheen = 0.05 * std::cos (2.0 * std::atan2 (dy, dx));
+                const double f = 0.55 - 0.45 * y / h + 0.08 * (ring - 0.5) + sheen;
                 put (x, y, ramp ({ BLK, D1, D2, D3 }, f, x, y));
-        }
+            }
         fill (0, 0, w, 1, MID);
         fill (0, h - 1, w, 1, BLK);
     }
