@@ -80,12 +80,69 @@ namespace ambika_plugin::pixel
             { '%', "101001010100101" }, { '*', "000101010101000" }, { '&', "010101010101011" }, { kArrow, "000001111001000" },
         };
 
+        // Panel print, 7 rows high, proportional: rows separated by spaces,
+        // '#' inked. Upper case only.
+        struct Glyph7Def { char c; const char* rows; };
+        constexpr Glyph7Def kFont7[] = {
+            { 'A', ".##. #..# #..# #### #..# #..# #..#" }, { 'B', "###. #..# #..# ###. #..# #..# ###." },
+            { 'C', ".##. #..# #... #... #... #..# .##." }, { 'D', "###. #..# #..# #..# #..# #..# ###." },
+            { 'E', "#### #... #... ###. #... #... ####" }, { 'F', "#### #... #... ###. #... #... #..." },
+            { 'G', ".##. #..# #... #.## #..# #..# .###" }, { 'H', "#..# #..# #..# #### #..# #..# #..#" },
+            { 'I', "### .#. .#. .#. .#. .#. ###" },        { 'J', "..## ...# ...# ...# ...# #..# .##." },
+            { 'K', "#..# #..# #.#. ##.. #.#. #..# #..#" }, { 'L', "#... #... #... #... #... #... ####" },
+            { 'M', "#...# ##.## #.#.# #.#.# #...# #...# #...#" }, { 'N', "#..# ##.# ##.# #.## #.## #..# #..#" },
+            { 'O', ".##. #..# #..# #..# #..# #..# .##." }, { 'P', "###. #..# #..# ###. #... #... #..." },
+            { 'Q', ".##. #..# #..# #..# #..# #.#. .#.#" }, { 'R', "###. #..# #..# ###. #.#. #..# #..#" },
+            { 'S', ".### #... #... .##. ...# ...# ###." }, { 'T', "##### ..#.. ..#.. ..#.. ..#.. ..#.. ..#.." },
+            { 'U', "#..# #..# #..# #..# #..# #..# .##." }, { 'V', "#...# #...# #...# #...# .#.#. .#.#. ..#.." },
+            { 'W', "#...# #...# #...# #.#.# #.#.# ##.## #...#" }, { 'X', "#...# #...# .#.#. ..#.. .#.#. #...# #...#" },
+            { 'Y', "#...# #...# .#.#. ..#.. ..#.. ..#.. ..#.." }, { 'Z', "#### ...# ..#. ..#. .#.. #... ####" },
+            { '0', ".##. #..# #.## #..# ##.# #..# .##." }, { '1', ".#. ##. .#. .#. .#. .#. ###" },
+            { '2', ".##. #..# ...# ..#. .#.. #... ####" }, { '3', "###. ...# ...# .##. ...# ...# ###." },
+            { '4', "..#. .##. #.#. #.#. #### ..#. ..#." }, { '5', "#### #... ###. ...# ...# #..# .##." },
+            { '6', ".##. #... #... ###. #..# #..# .##." }, { '7', "#### ...# ..#. ..#. .#.. .#.. .#.." },
+            { '8', ".##. #..# #..# .##. #..# #..# .##." }, { '9', ".##. #..# #..# .### ...# ...# .##." },
+            { ' ', "... ... ... ... ... ... ..." },        { '-', "... ... ... ### ... ... ..." },
+            { '/', "..# ..# .#. .#. .#. #.. #.." },        { '+', "... ... .#. ### .#. ... ..." },
+            { '.', ". . . . . . #" },                      { ',', ".. .. .. .. .. .# #." },
+            { ':', ". . # . . # ." },                      { '!', "# # # # # . #" },
+            { '?', ".##. #..# ...# ..#. .#.. .... .#.." }, { '\'', "# # . . . . ." },
+            { '(', ".# #. #. #. #. #. .#" },               { ')', "#. .# .# .# .# .# #." },
+            { '<', "... ..# .#. #.. .#. ..# ..." },        { '>', "... #.. .#. ..# .#. #.. ..." },
+            { '=', "... ... ### ... ### ... ..." },        { '#', ".#.#. .#.#. ##### .#.#. ##### .#.#. .#.#." },
+            { '%', "##..# ##.#. ...#. ..#.. .#... .#.## #..##" }, { '*', "... #.# .#. ### .#. #.# ..." },
+            { '&', ".##.. #..#. #.#.. .#... #.#.# #..#. .##.#" }, { '_', ".... .... .... .... .... .... ####" },
+            { kArrow, "..... ..#.. ...#. ##### ...#. ..#.. ....." },
+        };
+
+        struct Glyph7 { uint8_t width = 0; std::array<uint8_t, 7> rows {}; };
+
         struct Fonts
         {
             std::array<std::array<uint8_t, 7>, 128> g5 {};
             std::array<uint16_t, 128> g3 {};
+            std::array<Glyph7, 128> g7 {};
             Fonts()
             {
+                for (const auto& d : kFont7)
+                {
+                    auto& g = g7[(size_t) d.c];
+                    int row = 0, col = 0;
+                    for (const char* p = d.rows; *p != 0; ++p)
+                    {
+                        if (*p == ' ')
+                        {
+                            g.width = (uint8_t) col;
+                            ++row;
+                            col = 0;
+                            continue;
+                        }
+                        if (*p == '#')
+                            g.rows[(size_t) row] |= (uint8_t) (1u << col);
+                        ++col;
+                    }
+                    g.width = (uint8_t) col;
+                }
                 for (const auto& d : kFont5)
                     for (int i = 0; i < 7; ++i)
                         g5[(size_t) d.c][(size_t) i] = (uint8_t) std::stoi (std::string (d.rows + i * 2, 2), nullptr, 16);
@@ -173,12 +230,44 @@ namespace ambika_plugin::pixel
         }
     }
 
-    void Canvas::vfd (int x, int y, const juce::String& line0, const juce::String& line1, int columns)
+    namespace
     {
-        vfd (x, y, juce::StringArray { line0, line1 }, columns);
+        const Glyph7& glyph7 (juce::juce_wchar c)
+        {
+            if (c >= 'a' && c <= 'z')
+                c -= 'a' - 'A';
+            const auto& g = fonts().g7[(size_t) (c > 0 && c < 128 ? c : ' ')];
+            return g.width > 0 ? g : fonts().g7[(size_t) ' '];
+        }
     }
 
-    void Canvas::vfd (int x, int y, const juce::StringArray& lines, int columns)
+    void Canvas::text7 (const juce::String& s, int x, int y, int ink)
+    {
+        for (auto c : s)
+        {
+            const auto& g = glyph7 (c);
+            for (int i = 0; i < 7; ++i)
+                for (int b = 0; b < g.width; ++b)
+                    if ((g.rows[(size_t) i] >> b) & 1)
+                        put (x + b, y + i, ink);
+            x += g.width + 1;
+        }
+    }
+
+    int Canvas::width7 (const juce::String& s)
+    {
+        int width = 0;
+        for (auto c : s)
+            width += glyph7 (c).width + 1;
+        return std::max (0, width - 1);
+    }
+
+    void Canvas::vfd (int x, int y, const juce::String& line0, const juce::String& line1, int columns, int k)
+    {
+        vfd (x, y, juce::StringArray { line0, line1 }, columns, k);
+    }
+
+    void Canvas::vfd (int x, int y, const juce::StringArray& lines, int columns, int k)
     {
         for (int li = 0; li < lines.size(); ++li)
         {
@@ -189,12 +278,10 @@ namespace ambika_plugin::pixel
                 for (int i = 0; i < 7; ++i)
                     for (int b = 0; b < 5; ++b)
                     {
-                        int ink = VOFF;
-                        if (dot5 (g, i, b))
-                            ink = VON;
-                        else if (dot5 (g, i - 1, b) || dot5 (g, i + 1, b) || dot5 (g, i, b - 1) || dot5 (g, i, b + 1))
-                            ink = VHALO;
-                        put (x + ci * 6 + b, y + li * 9 + i, ink);
+                        const int ink = dot5 (g, i, b) ? VON : VOFF;
+                        for (int dy = 0; dy < k; ++dy)
+                            for (int dx = 0; dx < k; ++dx)
+                                put (x + (ci * 6 + b) * k + dx, y + (li * 9 + i) * k + dy, ink);
                     }
             }
         }
@@ -250,8 +337,8 @@ namespace ambika_plugin::pixel
 
     void Canvas::band (int x, int y, int width)
     {
-        fill (x, y, width, 9, D1);
-        fill (x, y + 9, width, 1, BLK);
+        fill (x, y, width, bandHeight - 1, D1);
+        fill (x, y + bandHeight - 1, width, 1, BLK);
     }
 
     void Canvas::headerBand (int x, int y, int width, int textWidth, int style)
@@ -260,16 +347,16 @@ namespace ambika_plugin::pixel
         {
             band (x, y, width);
             if (style == 8)
-                fill (x, y + 8, width, 1, LED_ON);
+                fill (x, y + bandHeight - 2, width, 1, LED_ON);
             return;
         }
         static const int fills[] = { NAVY, NAVY, NAVY, WOOD_DK, VOFF, LED_OFF, LT, LT, D1, LED_ON };
         const int ink = fills[std::clamp (style, 0, 9)];
         const int solid = style == 1 ? width : std::min (width, textWidth + 10);
-        fill (x, y, solid, 9, ink);
+        fill (x, y, solid, bandHeight - 1, ink);
         const int fade = std::min (width - solid, 40);
         for (int dx = 0; dx < width - solid; ++dx)
-            for (int row = 0; row < 9; ++row)
+            for (int row = 0; row < bandHeight - 1; ++row)
             {
                 const int cx = x + solid + dx, cy = y + row;
                 const double f = (dx + 0.5) / std::max (1, fade);
@@ -278,7 +365,7 @@ namespace ambika_plugin::pixel
                                  : ink == LED_ON ? ramp ({ LED_ON, LED_OFF, BLK }, f, cx, cy)
                                                  : ramp ({ ink, (int) BLK }, f, cx, cy));
             }
-        fill (x, y + 9, width, 1, BLK);
+        fill (x, y + bandHeight - 1, width, 1, BLK);
     }
 
     void Canvas::frame (int x, int y, int width, int height, int ink)
@@ -309,13 +396,14 @@ namespace ambika_plugin::pixel
     {
         if (withLed)
             led (x + (width >> 1) - 2, y - 8, on);
-        fill (x - 1, y - 1, width + 2, 18, BLK);
-        fill (x, y, width, 16, on ? D1 : D2);
+        const int bh = buttonHeight;
+        fill (x - 1, y - 1, width + 2, bh + 2, BLK);
+        fill (x, y, width, bh, on ? D1 : D2);
         fill (x, y, width, 1, on ? BLK : D3);
-        fill (x, y + 15, width, 1, on ? D3 : BLK);
-        fill (x, y, 1, 16, on ? BLK : D3);
-        fill (x + width - 1, y, 1, 16, on ? D3 : BLK);
-        text3c (label, x + (width >> 1), y + (on ? 6 : 5), on ? WH : LT);
+        fill (x, y + bh - 1, width, 1, on ? D3 : BLK);
+        fill (x, y, 1, bh, on ? BLK : D3);
+        fill (x + width - 1, y, 1, bh, on ? D3 : BLK);
+        text7c (label, x + (width >> 1), y + (bh - 7) / 2 + (on ? 1 : 0), on ? WH : LT);
     }
 
     void Canvas::line (int x0, int y0, int x1, int y1, int ink)
@@ -334,7 +422,7 @@ namespace ambika_plugin::pixel
     {
         const bool large = r >= 15;
         const int tickR = r + (large ? 4 : 3);
-        const int capR = large ? 7 : 5;
+        const int capR = large ? 7 : r >= 13 ? 6 : 5;
         const double pi = juce::MathConstants<double>::pi;
         for (int k = 0; k <= 10; ++k)
         {
@@ -361,15 +449,15 @@ namespace ambika_plugin::pixel
 
     void Canvas::bandLabel (const juce::String& s, int cx, int bandY, bool reversed, bool enabled)
     {
-        const int tw = width3 (s);
+        const int tw = width7 (s);
         if (reversed)
         {
-            fill (cx - (tw >> 1) - 3, bandY, tw + 6, 9, LT);
-            text3c (s, cx, bandY + 2, D1);
+            fill (cx - (tw >> 1) - 2, bandY, tw + 4, bandHeight - 1, LT);
+            text7c (s, cx, bandY + 2, D1);
         }
         else
         {
-            text3c (s, cx, bandY + 2, enabled ? LT : D3);
+            text7c (s, cx, bandY + 2, enabled ? LT : D3);
         }
     }
 

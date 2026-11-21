@@ -78,11 +78,20 @@ namespace ambika_plugin::pixel
         void text3 (const juce::String& s, int x, int y, int ink);
         void text3c (const juce::String& s, int centreX, int y, int ink) { text3 (s, centreX - (width3 (s) >> 1), y, ink); }
         static int width3 (const juce::String& s) { return std::max (0, s.length() * 4 - 1); }
+        // Panel print, 7 pixels high and proportional (mostly 4 wide), 1-pixel gaps. Upper case.
+        void text7 (const juce::String& s, int x, int y, int ink);
+        void text7c (const juce::String& s, int centreX, int y, int ink) { text7 (s, centreX - (width7 (s) >> 1), y, ink); }
+        static int width7 (const juce::String& s);
+
+        // Heights of the panel parts: a band (fill plus a black line under it)
+        // and a button (without its black border).
+        static constexpr int bandHeight = 12;
+        static constexpr int buttonHeight = 18;
 
         // Character display: two lines of 5x7 cells (pitch 6, line pitch 9),
-        // unlit dots shown, a halo on unlit dots next to lit ones in the cell.
-        void vfd (int x, int y, const juce::String& line0, const juce::String& line1, int columns = 40);
-        void vfd (int x, int y, const juce::StringArray& lines, int columns);
+        // unlit dots shown, no halo (it blurred the text); k blows each dot up to k x k.
+        void vfd (int x, int y, const juce::String& line0, const juce::String& line1, int columns = 40, int k = 1);
+        void vfd (int x, int y, const juce::StringArray& lines, int columns, int k = 1);
 
         // The faceplate.
         void plate();
@@ -98,7 +107,7 @@ namespace ambika_plugin::pixel
         void frame (int x, int y, int width, int height, int ink);
         void led (int x, int y, bool on);
         void button (int x, int y, int width, const juce::String& label, bool on, bool withLed = true);
-        // r = 15 (large) or 11 (small); value 0..1.
+        // r = 15 (large), 13 or 11 (small); value 0..1.
         void knob (int cx, int cy, int r, float value, bool enabled = true);
         // Panel print centred on cx in a band; reverse video when focused.
         void bandLabel (const juce::String& s, int cx, int bandY, bool reversed, bool enabled = true);

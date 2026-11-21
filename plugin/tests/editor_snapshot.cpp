@@ -269,6 +269,104 @@ int main (int argc, char** argv)
     }
     editor->setHeaderStyle (5);
 
+    // Character display size options, as one labelled comparison sheet of the top bar.
+    {
+        namespace px = ambika_plugin::pixel;
+        editor->showPage (0);
+        const auto& live = editor->renderCanvas();
+        px::Canvas plate (Editor::canvasWidth, Editor::canvasHeight);
+        plate.plate();
+        constexpr int stripH = 108, labelH = 14;
+        const juce::String d = juce::String::charToString (px::kDelimiter);
+        const juce::String readout = "shap  saw" + d + "parm    0" + d + "rang    0" + d + "tune    0";
+        const juce::String message = "saved: warm analog brass ensemble";
+        const juce::String name = "p2 warm analog brass ensemble*", tags = "brass, pad, poly, vintage, ensemble";
+
+        auto strip = [&] (const juce::String& label, int option)
+        {
+            px::Canvas c (Editor::canvasWidth, labelH + stripH);
+            for (int y = 0; y < stripH; ++y)
+                for (int x = 0; x < Editor::canvasWidth; ++x)
+                    c.put (x, labelH + y, live.at (x, y));
+            c.fill (0, 0, Editor::canvasWidth, labelH, px::BLK);
+            c.text7 (label, 6, 4, px::WH);
+            auto restore = [&] (int x0, int y0, int w, int h)
+            {
+                for (int y = y0; y < y0 + h; ++y)
+                    for (int x = x0; x < x0 + w; ++x)
+                        c.put (x, labelH + y, plate.at (x, y));
+            };
+            const int o = labelH;
+            if (option == 0)  // B: as built now
+            {
+                c.fill (131, o + 21, 239, 16, px::BLK);
+                c.vfd (131, o + 21, readout, message, 40);
+                c.fill (395, o + 21, 227, 16, px::BLK);
+                c.vfd (395, o + 21, name, tags, 38);
+            }
+            else
+            {
+                restore (118, 4, 522, 50);
+                c.well (122, o + 8, 508, 42);
+                c.fill (126, o + 12, 500, 34, px::BLK);
+                c.vfd (137, o + 13, readout, message, 40, 2);
+                if (option == 1)  // A: small logo, narrow program window under it
+                {
+                    restore (0, 4, 118, 50);
+                    c.well (10, o + 8, 106, 16);
+                    c.fill (12, o + 10, 102, 12, px::BLK);
+                    c.logo (40, o + 10, 1, 0);
+                    c.well (10, o + 26, 106, 24);
+                    c.fill (12, o + 28, 102, 20, px::BLK);
+                    c.vfd (15, o + 30, name.substring (0, 16), tags.substring (0, 16), 16);
+                }
+                else  // C: no program window; the name goes in the PROGRAM caption
+                {
+                    auto caption = name.toUpperCase();
+                    while (px::Canvas::width7 (caption) > 146)
+                        caption = caption.dropLastCharacters (1);
+                    c.headerBand (326, o + 92, 154, px::Canvas::width7 (caption) + 4, 5);
+                    c.text7 (caption, 330, o + 94, px::WH);
+                }
+            }
+            return c.toImage (4);
+        };
+
+        std::vector<juce::Image> strips;
+        const auto before = juce::ImageFileFormat::loadFrom (dir.getSiblingFile ("before").getChildFile ("synth-2x.png"));
+        if (before.isValid())
+        {
+            px::Canvas label (Editor::canvasWidth, labelH);
+            label.fill (0, 0, Editor::canvasWidth, labelH, px::BLK);
+            label.text7 ("BEFORE: LAST COMMIT (SMALLER KNOBS AND LETTERING)", 6, 4, px::WH);
+            juce::Image img (juce::Image::RGB, 1280, (labelH + stripH) * 2, true);
+            juce::Graphics g (img);
+            g.drawImageAt (label.toImage (4), 0, 0);
+            g.drawImage (before, 0, labelH * 2, 1280, stripH * 2, 0, 0, 1280, stripH * 2);
+            strips.push_back (img);
+        }
+        strips.push_back (strip ("B: KEEP THE DISPLAY TEXT SIZE (BUILT NOW)", 0));
+        strips.push_back (strip ("A: DOUBLE THE DISPLAY - SMALL LOGO, 16-COLUMN PROGRAM WINDOW UNDER IT", 1));
+        strips.push_back (strip ("C: DOUBLE THE DISPLAY - NO PROGRAM WINDOW, NAME IN THE PROGRAM CAPTION", 2));
+        int h = 0;
+        for (auto& s : strips)
+            h += s.getHeight() + 8;
+        juce::Image sheet (juce::Image::RGB, 1280, h, true);
+        {
+            juce::Graphics g (sheet);
+            g.fillAll (juce::Colours::black);
+            int y = 0;
+            for (auto& s : strips)
+            {
+                g.drawImageAt (s, 0, y);
+                y += s.getHeight() + 8;
+            }
+        }
+        const auto displayDir = dir.getParentDirectory().getSiblingFile ("display-options");
+        displayDir.createDirectory();
+        writePng (sheet, displayDir.getChildFile ("sheet.png"));
+    }
+
     editor->showPage (0);
     editor->showSaveDialog();
     snapshot (*editor, dir, "save-dialog");
