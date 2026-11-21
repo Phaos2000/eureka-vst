@@ -93,6 +93,28 @@ float Resampler::Pop() {
     const float x = buffer_[static_cast<size_t>(index & (kBufferSize - 1))];
     sum += x * Kernel(static_cast<double>(k) - frac);
   }
+  Advance();
+  return sum;
+}
+
+void Resampler::PopStereo(Resampler& other, float* out, float* other_out) {
+  const int64_t base = static_cast<int64_t>(std::floor(position_));
+  const double frac = position_ - static_cast<double>(base);
+  float sum = 0.0f;
+  float other_sum = 0.0f;
+  for (int k = -half_width_ + 1; k <= half_width_; ++k) {
+    const size_t index = static_cast<size_t>((base + k) & (kBufferSize - 1));
+    const float weight = Kernel(static_cast<double>(k) - frac);
+    sum += buffer_[index] * weight;
+    other_sum += other.buffer_[index] * weight;
+  }
+  Advance();
+  other.Advance();
+  *out = sum;
+  *other_out = other_sum;
+}
+
+void Resampler::Advance() {
   position_ += step_;
   // Keep the numbers small: rebase both counters together, by a multiple of
   // the ring size so that buffer indices are unchanged.
@@ -102,7 +124,6 @@ float Resampler::Pop() {
     position_ -= static_cast<double>(shift);
     written_ -= shift;
   }
-  return sum;
 }
 
 }  // namespace plugin

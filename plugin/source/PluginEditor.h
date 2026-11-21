@@ -85,6 +85,9 @@ namespace ambika_plugin
 
         void timerCallback() override;
         void handleAsyncUpdate() override;
+        // Hash of everything outside the editor that the panel shows, plus the
+        // timed messages; the timer redraws only when it changes.
+        juce::uint64 shownStateHash() const;
         void refresh();
         void render();
         void renderOnce();
@@ -180,6 +183,10 @@ namespace ambika_plugin
         juce::String toast;
         bool toastIsError = false;
         juce::uint32 toastTime = 0;
+
+        // What the timer last drew from (see shownStateHash).
+        juce::uint64 timerStateHash = 0;
+        juce::uint32 timerRefreshTime = 0;
 
         // Filter response of the Surge models (measured, so cached).
         std::array<int, 5> surgeKey { -1, -1, -1, -1, -1 };

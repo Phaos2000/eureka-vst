@@ -67,6 +67,14 @@ class AnalogVoice {
   float s1_ = 0.0f;
   float s2_ = 0.0f;
 
+  // SVF coefficients for the CVs they were computed from. The smoothed CVs
+  // settle on a fixed value, so tan() and exp2() run only while they move.
+  float coefficient_cutoff_cv_ = -1.0f;
+  float coefficient_resonance_cv_ = -1.0f;
+  float g_ = 0.0f;
+  float k_ = 0.0f;
+  float denominator_ = 0.0f;
+
   // Surge filter path. block_ holds one oversampled block before the VCA.
   SurgeFilter surge_;
   float block_[256];

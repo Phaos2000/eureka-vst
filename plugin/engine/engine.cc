@@ -356,8 +356,7 @@ void Engine::Render(float* left, float* right, int num_samples) {
     while (!resampler_left_.CanPop()) {
       RenderControlBlock();
     }
-    left[i] = resampler_left_.Pop();
-    right[i] = resampler_right_.Pop();
+    resampler_left_.PopStereo(resampler_right_, &left[i], &right[i]);
   }
 }
 

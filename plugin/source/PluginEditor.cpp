@@ -82,7 +82,36 @@ namespace ambika_plugin
 
     void AmbikaAudioProcessorEditor::timerCallback()
     {
+        // Mouse and key edits redraw at once; the timer picks up host automation,
+        // preset loads, the voice LEDs and messages timing out. Anything else the
+        // hash misses still shows within a second.
+        const auto now = juce::Time::getMillisecondCounter();
+        const auto hash = shownStateHash();
+        if (hash == timerStateHash && now - timerRefreshTime < 1000)
+            return;
+        timerStateHash = hash;
+        timerRefreshTime = now;
         refresh();
+    }
+
+    juce::uint64 AmbikaAudioProcessorEditor::shownStateHash() const
+    {
+        juce::uint64 hash = 14695981039346656037ull;
+        const auto mix = [&hash] (juce::uint32 value) { hash = (hash ^ value) * 1099511628211ull; };
+        for (auto* parameter : audioProcessor.getParameters())
+        {
+            const float value = parameter->getValue();
+            juce::uint32 bits;
+            std::memcpy (&bits, &value, sizeof (bits));
+            mix (bits);
+        }
+        mix ((juce::uint32) audioProcessor.editedPart());
+        for (int v = 0; v < kNumVoices; ++v)
+            mix (audioProcessor.voiceLevel (v) > 8 ? 1u : 0u);
+        const auto now = juce::Time::getMillisecondCounter();
+        mix (toast.isNotEmpty() && now - toastTime < kToastMs ? 1u : 0u);
+        mix (lastEditTime != 0 && now - lastEditTime < kDetailMs ? 1u : 0u);
+        return hash;
     }
 
     void AmbikaAudioProcessorEditor::handleAsyncUpdate()
